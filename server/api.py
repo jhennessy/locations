@@ -105,6 +105,29 @@ class PlaceResponse(BaseModel):
         from_attributes = True
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AdminUserResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    is_active: bool
+    is_admin: bool
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+
+class AdminUserUpdate(BaseModel):
+    is_active: Optional[bool] = None
+    is_admin: Optional[bool] = None
+    new_password: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Auth dependency
 # ---------------------------------------------------------------------------
@@ -119,6 +142,12 @@ def get_current_user(authorization: str = Header(...), db: Session = Depends(get
     user = db.query(User).filter(User.id == payload["sub"]).first()
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+def get_admin_user(user: User = Depends(get_current_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
 
@@ -391,6 +420,78 @@ def update_place_name(
     place.name = body.get("name", place.name)
     db.commit()
     return {"id": place.id, "name": place.name}
+
+
+# ---------------------------------------------------------------------------
+# Password change
+# ---------------------------------------------------------------------------
+
+@router.post("/change-password")
+def change_password(
+    req: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(req.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    user.password_hash = hash_password(req.new_password)
+    db.commit()
+    return {"status": "password changed"}
+
+
+# ---------------------------------------------------------------------------
+# Admin user management
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/users", response_model=list[AdminUserResponse])
+def admin_list_users(admin: User = Depends(get_admin_user), db: Session = Depends(get_db)):
+    users = db.query(User).order_by(User.id).all()
+    return [
+        AdminUserResponse(
+            id=u.id,
+            username=u.username,
+            email=u.email,
+            is_active=u.is_active,
+            is_admin=u.is_admin,
+            created_at=u.created_at.isoformat() if u.created_at else "",
+        )
+        for u in users
+    ]
+
+
+@router.put("/admin/users/{user_id}")
+def admin_update_user(
+    user_id: int,
+    req: AdminUserUpdate,
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if req.is_active is not None:
+        target.is_active = req.is_active
+    if req.is_admin is not None:
+        target.is_admin = req.is_admin
+    if req.new_password:
+        target.password_hash = hash_password(req.new_password)
+    db.commit()
+    return {"id": target.id, "username": target.username, "is_active": target.is_active, "is_admin": target.is_admin}
+
+
+@router.delete("/admin/users/{user_id}", status_code=204)
+def admin_delete_user(
+    user_id: int,
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(target)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------

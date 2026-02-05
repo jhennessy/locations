@@ -23,7 +23,7 @@ def get_session_user() -> tuple[Session, User | None]:
     return db, user
 
 
-def _nav_drawer():
+def _nav_drawer(user=None):
     """Shared left-drawer navigation."""
     with ui.left_drawer().classes("bg-blue-1"):
         ui.label("Navigation").classes("text-h6 q-pa-sm")
@@ -32,6 +32,10 @@ def _nav_drawer():
         ui.link("Map", "/map").classes("q-pa-sm")
         ui.link("Visits", "/visits").classes("q-pa-sm")
         ui.link("Frequent Places", "/places").classes("q-pa-sm")
+        ui.separator()
+        ui.link("Settings", "/settings").classes("q-pa-sm")
+        if user and user.is_admin:
+            ui.link("Admin", "/admin").classes("q-pa-sm")
 
 
 def _header(user):
@@ -150,7 +154,7 @@ def dashboard_page():
         return
 
     _header(user)
-    _nav_drawer()
+    _nav_drawer(user)
 
     device_count = db.query(Device).filter(Device.user_id == user.id).count()
     location_count = (
@@ -223,7 +227,7 @@ def devices_page():
         return
 
     _header(user)
-    _nav_drawer()
+    _nav_drawer(user)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Device Management").classes("text-h5 q-mb-md")
@@ -297,7 +301,7 @@ def map_page():
         return
 
     _header(user)
-    _nav_drawer()
+    _nav_drawer(user)
 
     devices = db.query(Device).filter(Device.user_id == user.id).all()
 
@@ -411,7 +415,7 @@ def visits_page():
         return
 
     _header(user)
-    _nav_drawer()
+    _nav_drawer(user)
 
     devices = db.query(Device).filter(Device.user_id == user.id).all()
 
@@ -498,7 +502,7 @@ def places_page():
         return
 
     _header(user)
-    _nav_drawer()
+    _nav_drawer(user)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Frequent Places").classes("text-h5 q-mb-md")
@@ -569,4 +573,167 @@ def places_page():
 
         ui.button("Rename", on_click=rename_place).classes("q-mt-sm")
 
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# Settings page — change password
+# ---------------------------------------------------------------------------
+@ui.page("/settings")
+def settings_page():
+    db, user = get_session_user()
+    if user is None:
+        ui.navigate.to("/login")
+        return
+
+    _header(user)
+    _nav_drawer(user)
+
+    with ui.column().classes("q-pa-md w-full"):
+        ui.label("Settings").classes("text-h5 q-mb-md")
+
+        with ui.card().classes("w-96"):
+            ui.label("Change Password").classes("text-h6 q-mb-sm")
+            current_pw = ui.input("Current Password", password=True, password_toggle_button=True).classes("w-full")
+            new_pw = ui.input("New Password", password=True, password_toggle_button=True).classes("w-full")
+            confirm_pw = ui.input("Confirm New Password", password=True, password_toggle_button=True).classes("w-full")
+
+            def do_change_password():
+                if not current_pw.value or not new_pw.value:
+                    ui.notify("All fields are required", type="warning")
+                    return
+                if new_pw.value != confirm_pw.value:
+                    ui.notify("New passwords do not match", type="warning")
+                    return
+                inner_db = SessionLocal()
+                u = inner_db.query(User).filter(User.id == user.id).first()
+                if not verify_password(current_pw.value, u.password_hash):
+                    ui.notify("Current password is incorrect", type="negative")
+                    inner_db.close()
+                    return
+                u.password_hash = hash_password(new_pw.value)
+                inner_db.commit()
+                inner_db.close()
+                current_pw.value = ""
+                new_pw.value = ""
+                confirm_pw.value = ""
+                ui.notify("Password changed successfully", type="positive")
+
+            ui.button("Change Password", on_click=do_change_password).classes("q-mt-md")
+
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# Admin page — user management (admin only)
+# ---------------------------------------------------------------------------
+@ui.page("/admin")
+def admin_page():
+    db, user = get_session_user()
+    if user is None:
+        ui.navigate.to("/login")
+        return
+    if not user.is_admin:
+        ui.navigate.to("/")
+        return
+
+    _header(user)
+    _nav_drawer(user)
+
+    users_container = ui.column().classes("q-pa-md w-full")
+
+    def render_users():
+        users_container.clear()
+        inner_db = SessionLocal()
+        all_users = inner_db.query(User).order_by(User.id).all()
+
+        with users_container:
+            ui.label("User Management").classes("text-h5 q-mb-md")
+
+            # User table
+            for u in all_users:
+                with ui.card().classes("w-full q-mb-sm"):
+                    with ui.row().classes("items-center justify-between w-full"):
+                        with ui.column():
+                            with ui.row().classes("items-center q-gutter-sm"):
+                                ui.label(u.username).classes("text-subtitle1 text-bold")
+                                if u.is_admin:
+                                    ui.badge("admin", color="blue")
+                                if not u.is_active:
+                                    ui.badge("disabled", color="red")
+                            ui.label(f"{u.email}").classes("text-caption text-grey")
+                            ui.label(
+                                f"Created: {u.created_at.strftime('%Y-%m-%d %H:%M') if u.created_at else 'N/A'}"
+                            ).classes("text-caption text-grey")
+
+                        with ui.row().classes("q-gutter-sm"):
+                            def make_toggle_active(uid, currently_active):
+                                def toggle():
+                                    tdb = SessionLocal()
+                                    target = tdb.query(User).filter(User.id == uid).first()
+                                    if target:
+                                        target.is_active = not currently_active
+                                        tdb.commit()
+                                    tdb.close()
+                                    render_users()
+                                return toggle
+
+                            def make_toggle_admin(uid, currently_admin):
+                                def toggle():
+                                    tdb = SessionLocal()
+                                    target = tdb.query(User).filter(User.id == uid).first()
+                                    if target:
+                                        target.is_admin = not currently_admin
+                                        tdb.commit()
+                                    tdb.close()
+                                    render_users()
+                                return toggle
+
+                            def make_delete(uid):
+                                def delete():
+                                    if uid == user.id:
+                                        ui.notify("Cannot delete yourself", type="warning")
+                                        return
+                                    tdb = SessionLocal()
+                                    target = tdb.query(User).filter(User.id == uid).first()
+                                    if target:
+                                        tdb.delete(target)
+                                        tdb.commit()
+                                    tdb.close()
+                                    render_users()
+                                return delete
+
+                            if u.id != user.id:
+                                label = "Disable" if u.is_active else "Enable"
+                                ui.button(label, on_click=make_toggle_active(u.id, u.is_active)).props("flat")
+                                admin_label = "Remove Admin" if u.is_admin else "Make Admin"
+                                ui.button(admin_label, on_click=make_toggle_admin(u.id, u.is_admin)).props("flat")
+                                ui.button("Delete", on_click=make_delete(u.id)).props("flat color=red")
+
+            # Reset password section
+            ui.separator().classes("q-my-md")
+            ui.label("Reset User Password").classes("text-h6 q-mb-sm")
+            user_options = {u.id: u.username for u in all_users if u.id != user.id}
+            if user_options:
+                sel_user = ui.select(options=user_options, label="Select User").classes("w-64")
+                reset_pw = ui.input("New Password", password=True, password_toggle_button=True).classes("w-64")
+
+                def do_reset():
+                    if not sel_user.value or not reset_pw.value:
+                        ui.notify("Select a user and enter a password", type="warning")
+                        return
+                    tdb = SessionLocal()
+                    target = tdb.query(User).filter(User.id == sel_user.value).first()
+                    if target:
+                        target.password_hash = hash_password(reset_pw.value)
+                        tdb.commit()
+                        ui.notify(f"Password reset for {target.username}", type="positive")
+                        reset_pw.value = ""
+                    tdb.close()
+
+                ui.button("Reset Password", on_click=do_reset).classes("q-mt-sm")
+
+        inner_db.close()
+
+    render_users()
     db.close()

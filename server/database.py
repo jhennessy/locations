@@ -21,7 +21,28 @@ def get_db():
 
 
 def init_db():
-    """Create all tables."""
+    """Create all tables and seed the default admin user."""
     from models import User, Device, Location, Place, Visit  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _seed_admin()
+
+
+def _seed_admin():
+    """Create the default admin user if it doesn't exist."""
+    from auth import hash_password
+    from models import User
+
+    db = SessionLocal()
+    try:
+        if not db.query(User).filter(User.username == "admin").first():
+            admin = User(
+                username="admin",
+                email="admin@localhost",
+                password_hash=hash_password("admin"),
+                is_admin=True,
+            )
+            db.add(admin)
+            db.commit()
+    finally:
+        db.close()

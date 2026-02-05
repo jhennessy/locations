@@ -20,7 +20,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var uploadError: String?
 
     /// The device ID to report locations for.
-    var deviceId: Int? {
+    @Published var deviceId: Int? {
         didSet {
             if let id = deviceId {
                 UserDefaults.standard.set(id, forKey: "selected_device_id")

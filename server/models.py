@@ -16,6 +16,7 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
 
     devices = relationship("Device", back_populates="owner", cascade="all, delete-orphan")
 
