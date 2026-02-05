@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// Defers view creation until it appears on screen.
+struct LazyView<Content: View>: View {
+    let build: () -> Content
+    init(_ build: @autoclosure @escaping () -> Content) {
+        self.build = build
+    }
+    var body: Content { build() }
+}
+
 struct ContentView: View {
     @EnvironmentObject var api: APIService
     @ObservedObject var locationService = LocationService.shared
@@ -17,17 +26,17 @@ struct ContentView: View {
                             Label("Tracking", systemImage: "location.fill")
                         }
 
-                    VisitsView()
+                    LazyView(VisitsView())
                         .tabItem {
                             Label("Visits", systemImage: "mappin.and.ellipse")
                         }
 
-                    FrequentPlacesView()
+                    LazyView(FrequentPlacesView())
                         .tabItem {
                             Label("Places", systemImage: "star.fill")
                         }
 
-                    SettingsView()
+                    LazyView(SettingsView())
                         .tabItem {
                             Label("Settings", systemImage: "gear")
                         }

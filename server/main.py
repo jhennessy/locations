@@ -32,6 +32,9 @@ logger = logging.getLogger("locationtracker")
 logging.getLogger("watchfiles").setLevel(logging.WARNING)
 logging.getLogger("multipart").setLevel(logging.WARNING)
 
+# Serve static files (favicon, icons)
+app.add_static_files("/static", os.path.join(os.path.dirname(__file__), "static"))
+
 # Mount FastAPI REST endpoints for the iOS app
 app.include_router(router)
 
@@ -43,6 +46,7 @@ import pages  # noqa: F401, E402
 
 ui.run(
     title="Location Tracker",
+    favicon="static/icon-512.png",
     port=8080,
     storage_secret=os.environ.get("STORAGE_SECRET", "change-me-in-production"),
     show=False,

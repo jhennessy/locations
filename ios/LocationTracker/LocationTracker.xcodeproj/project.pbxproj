@@ -25,6 +25,7 @@
 		8A1B2C3D4E5F60718293A4D0 /* Place.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D0 /* Place.swift */; };
 		8A1B2C3D4E5F60718293A4D1 /* TestData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D1 /* TestData.swift */; };
 		8A1B2C3D4E5F60718293A4E0 /* ModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4E0 /* ModelTests.swift */; };
+		8A1B2C3D4E5F60718293A4F0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4F0 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,6 +57,7 @@
 		1A2B3C4D5E6F70819203A4D0 /* Place.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Place.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4D1 /* TestData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestData.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4D2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		1A2B3C4D5E6F70819203A4F0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4E0 /* ModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTests.swift; sourceTree = "<group>"; };
 		9F0E1D2C3B4A59687706A5B4 /* LocationTracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LocationTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F0E1D2C3B4A59687706A5B5 /* LocationTrackerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocationTrackerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -93,6 +95,7 @@
 			children = (
 				1A2B3C4D5E6F70819203A4B5 /* LocationTrackerApp.swift */,
 				1A2B3C4D5E6F70819203A4D2 /* Info.plist */,
+				1A2B3C4D5E6F70819203A4F0 /* Assets.xcassets */,
 				2B3C4D5E6F70819203A4B5C9 /* Models */,
 				2B3C4D5E6F70819203A4B5CA /* Views */,
 				2B3C4D5E6F70819203A4B5CB /* Services */,
@@ -234,6 +237,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8A1B2C3D4E5F60718293A4F0 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
