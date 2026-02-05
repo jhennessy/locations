@@ -81,6 +81,7 @@ DEFAULT_THRESHOLDS = {
     "visit_radius_m": "50.0",
     "min_visit_duration_s": "300",
     "place_snap_radius_m": "80.0",
+    "visit_merge_gap_s": "180",
 }
 
 

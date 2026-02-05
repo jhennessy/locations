@@ -36,6 +36,9 @@ MIN_VISIT_DURATION_S = 300        # 5 minutes
 # Place snapping
 PLACE_SNAP_RADIUS_M = 80.0       # snap to existing place within this distance
 
+# Visit merging
+VISIT_MERGE_GAP_S = 180          # merge consecutive visits at same place if gap <= 3 minutes
+
 # Nominatim rate limiting (max 1 req/sec per OSM policy)
 _last_nominatim_call = 0.0
 
@@ -49,6 +52,7 @@ def get_thresholds(db: Session) -> dict:
         "visit_radius_m": VISIT_RADIUS_M,
         "min_visit_duration_s": MIN_VISIT_DURATION_S,
         "place_snap_radius_m": PLACE_SNAP_RADIUS_M,
+        "visit_merge_gap_s": VISIT_MERGE_GAP_S,
     }
     rows = db.query(Config).filter(Config.key.in_(defaults.keys())).all()
     for row in rows:
@@ -177,6 +181,53 @@ def _maybe_emit_visit(
             "departure": departure,
             "duration_seconds": int(duration),
         })
+
+
+# ---------------------------------------------------------------------------
+# Step 2b: Visit merging
+# ---------------------------------------------------------------------------
+
+def merge_nearby_visits(visits: list[dict], thresholds: dict | None = None) -> list[dict]:
+    """Merge consecutive visits at the same location if the gap between them is short.
+
+    If a person leaves a place and returns within visit_merge_gap_s, the two
+    visits are combined into one continuous visit.  "Same location" means the
+    centroids are within place_snap_radius_m of each other.
+    """
+    if len(visits) < 2:
+        return visits
+
+    merge_gap = (thresholds or {}).get("visit_merge_gap_s", VISIT_MERGE_GAP_S)
+    snap_radius = (thresholds or {}).get("place_snap_radius_m", PLACE_SNAP_RADIUS_M)
+
+    merged: list[dict] = [visits[0].copy()]
+
+    for v in visits[1:]:
+        prev = merged[-1]
+        gap = (v["arrival"] - prev["departure"]).total_seconds()
+        dist = haversine_m(prev["latitude"], prev["longitude"], v["latitude"], v["longitude"])
+
+        if gap <= merge_gap and dist <= snap_radius:
+            # Merge: extend departure, recalculate duration, average the centroid
+            prev["departure"] = v["departure"]
+            prev["duration_seconds"] = int(
+                (prev["departure"] - prev["arrival"]).total_seconds()
+            )
+            # Weighted average of centroids (by original duration)
+            prev_weight = prev["duration_seconds"] - v["duration_seconds"]
+            if prev_weight <= 0:
+                prev_weight = 1
+            total_weight = prev_weight + v["duration_seconds"]
+            prev["latitude"] = (
+                prev["latitude"] * prev_weight + v["latitude"] * v["duration_seconds"]
+            ) / total_weight
+            prev["longitude"] = (
+                prev["longitude"] * prev_weight + v["longitude"] * v["duration_seconds"]
+            ) / total_weight
+        else:
+            merged.append(v.copy())
+
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +370,9 @@ def _process_locations_since(
     raw_visits = detect_visits(clean_points, thresholds)
     if not raw_visits:
         return []
+
+    # Step 2b: Merge visits at same place with short gaps
+    raw_visits = merge_nearby_visits(raw_visits, thresholds)
 
     # Step 3 & 4: Snap to places, geocode, create Visit records
     new_visits = []

@@ -8,6 +8,7 @@ import pytest
 from processing import (
     filter_gps_errors,
     detect_visits,
+    merge_nearby_visits,
     haversine_m,
     snap_to_place,
     process_device_locations,
@@ -242,3 +243,79 @@ class TestProcessDeviceLocations:
     def test_empty_device(self, db, test_user, test_device):
         visits = process_device_locations(db, test_device.id, test_user.id)
         assert len(visits) == 0
+
+
+# =====================================================================
+# Visit merging tests
+# =====================================================================
+
+class TestMergeNearbyVisits:
+    def test_no_merge_when_different_locations(self):
+        """Visits at different places should not be merged."""
+        base = datetime.datetime(2024, 1, 15, 10, 0, 0)
+        visits = [
+            {"latitude": 37.7615, "longitude": -122.4240, "arrival": base,
+             "departure": base + datetime.timedelta(minutes=10), "duration_seconds": 600},
+            {"latitude": 37.7738, "longitude": -122.4128, "arrival": base + datetime.timedelta(minutes=11),
+             "departure": base + datetime.timedelta(minutes=20), "duration_seconds": 540},
+        ]
+        result = merge_nearby_visits(visits)
+        assert len(result) == 2
+
+    def test_no_merge_when_gap_too_long(self):
+        """Visits at the same place but >3 min apart should not be merged."""
+        base = datetime.datetime(2024, 1, 15, 10, 0, 0)
+        visits = [
+            {"latitude": 37.7615, "longitude": -122.4240, "arrival": base,
+             "departure": base + datetime.timedelta(minutes=10), "duration_seconds": 600},
+            {"latitude": 37.7616, "longitude": -122.4241, "arrival": base + datetime.timedelta(minutes=14),
+             "departure": base + datetime.timedelta(minutes=25), "duration_seconds": 660},
+        ]
+        result = merge_nearby_visits(visits)
+        assert len(result) == 2
+
+    def test_merges_same_place_short_gap(self):
+        """Visits at the same place with <3 min gap should be merged."""
+        base = datetime.datetime(2024, 1, 15, 10, 0, 0)
+        visits = [
+            {"latitude": 37.7615, "longitude": -122.4240, "arrival": base,
+             "departure": base + datetime.timedelta(minutes=10), "duration_seconds": 600},
+            {"latitude": 37.7616, "longitude": -122.4241, "arrival": base + datetime.timedelta(minutes=12),
+             "departure": base + datetime.timedelta(minutes=25), "duration_seconds": 780},
+        ]
+        result = merge_nearby_visits(visits)
+        assert len(result) == 1
+        # Duration should span from first arrival to last departure (25 min = 1500s)
+        assert result[0]["duration_seconds"] == 1500
+        assert result[0]["arrival"] == base
+        assert result[0]["departure"] == base + datetime.timedelta(minutes=25)
+
+    def test_merges_multiple_returns(self):
+        """Three visits at the same place with short gaps should all merge."""
+        base = datetime.datetime(2024, 1, 15, 10, 0, 0)
+        visits = [
+            {"latitude": 37.7615, "longitude": -122.4240, "arrival": base,
+             "departure": base + datetime.timedelta(minutes=10), "duration_seconds": 600},
+            {"latitude": 37.7616, "longitude": -122.4241, "arrival": base + datetime.timedelta(minutes=12),
+             "departure": base + datetime.timedelta(minutes=20), "duration_seconds": 480},
+            {"latitude": 37.7615, "longitude": -122.4240, "arrival": base + datetime.timedelta(minutes=21),
+             "departure": base + datetime.timedelta(minutes=30), "duration_seconds": 540},
+        ]
+        result = merge_nearby_visits(visits)
+        assert len(result) == 1
+        assert result[0]["duration_seconds"] == 1800  # 30 min
+
+    def test_empty_and_single(self):
+        assert merge_nearby_visits([]) == []
+        v = [{"latitude": 37.7615, "longitude": -122.4240,
+              "arrival": datetime.datetime.now(), "departure": datetime.datetime.now(),
+              "duration_seconds": 600}]
+        assert len(merge_nearby_visits(v)) == 1
+
+    def test_existing_trace_unchanged(self):
+        """The standard test trace (Home → Coffee → Office) should not merge
+        because the places are far apart."""
+        clean = filter_gps_errors(GPS_TRACE)
+        visits = detect_visits(clean)
+        merged = merge_nearby_visits(visits)
+        assert len(merged) == len(visits)  # still 3

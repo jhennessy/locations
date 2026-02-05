@@ -212,6 +212,7 @@ def dashboard_page():
                     "lon": f"{loc.longitude:.6f}",
                     "time": loc.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
                     "received": loc.received_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    "notes": loc.notes or "",
                 }
                 for loc in recent
             ]
@@ -221,6 +222,7 @@ def dashboard_page():
                 {"name": "lon", "label": "Longitude", "field": "lon"},
                 {"name": "time", "label": "Device Time", "field": "time"},
                 {"name": "received", "label": "Received", "field": "received"},
+                {"name": "notes", "label": "Notes", "field": "notes", "align": "left"},
             ]
             ui.table(columns=columns, rows=rows).classes("w-full")
         else:
@@ -653,6 +655,7 @@ _THRESHOLD_LABELS = {
     "visit_radius_m": ("Visit Cluster Radius (m)", "Max radius for grouping stationary points"),
     "min_visit_duration_s": ("Min Visit Duration (s)", "Minimum seconds to count as a visit (300 = 5 min)"),
     "place_snap_radius_m": ("Place Snap Radius (m)", "Snap visit to existing place if within this distance"),
+    "visit_merge_gap_s": ("Visit Merge Gap (s)", "Merge consecutive visits at same place if gap is shorter (180 = 3 min)"),
 }
 
 
