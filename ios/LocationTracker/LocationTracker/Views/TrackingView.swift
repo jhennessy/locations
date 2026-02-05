@@ -60,6 +60,22 @@ struct TrackingView: View {
                     .labelsHidden()
                 }
 
+                // Motion state
+                if locationService.isTracking {
+                    HStack(spacing: 8) {
+                        Image(systemName: trackingModeIcon)
+                            .foregroundStyle(trackingModeColor)
+                        Text(locationService.trackingMode.description)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(trackingModeColor)
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text(locationService.lastMotionActivity)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 // Stats
                 HStack(spacing: 24) {
                     statItem(title: "Buffered", value: "\(locationService.buffer.count)")
@@ -105,6 +121,22 @@ struct TrackingView: View {
             }
             .padding()
             .background(.ultraThinMaterial)
+        }
+    }
+
+    private var trackingModeIcon: String {
+        switch locationService.trackingMode {
+        case .gettingFix: return "antenna.radiowaves.left.and.right"
+        case .stationary: return "moon.zzz.fill"
+        case .moving: return "figure.walk"
+        }
+    }
+
+    private var trackingModeColor: Color {
+        switch locationService.trackingMode {
+        case .gettingFix: return .blue
+        case .stationary: return .orange
+        case .moving: return .green
         }
     }
 

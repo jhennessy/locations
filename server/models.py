@@ -50,6 +50,7 @@ class Location(Base):
     timestamp = Column(DateTime, nullable=False)
     received_at = Column(DateTime, default=datetime.datetime.utcnow)
     batch_id = Column(String, nullable=True, index=True)
+    notes = Column(Text, nullable=True)
 
     device = relationship("Device", back_populates="locations")
 

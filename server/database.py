@@ -44,6 +44,13 @@ def _migrate():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
 
+    if "locations" in insp.get_table_names():
+        columns = {c["name"] for c in insp.get_columns("locations")}
+        if "notes" not in columns:
+            logger.info("Migrating: adding notes column to locations table")
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE locations ADD COLUMN notes TEXT"))
+
 
 def _seed_admin():
     """Create the default admin user if it doesn't exist."""

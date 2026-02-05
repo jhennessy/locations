@@ -67,6 +67,7 @@ class LocationPoint(BaseModel):
     speed: Optional[float] = None
     course: Optional[float] = None
     timestamp: str = Field(..., description="ISO 8601 timestamp from the device")
+    notes: Optional[str] = None
 
 
 class LocationBatch(BaseModel):
@@ -252,6 +253,7 @@ def upload_locations(batch: LocationBatch, user: User = Depends(get_current_user
             timestamp=datetime.datetime.fromisoformat(pt.timestamp),
             received_at=now,
             batch_id=batch_id,
+            notes=pt.notes,
         )
         db.add(loc)
 
