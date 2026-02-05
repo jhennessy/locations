@@ -8,6 +8,9 @@ RUN pip install --no-cache-dir \
 
 COPY . .
 
+ARG COMMIT_SHA=""
+ENV COMMIT_SHA=${COMMIT_SHA}
+
 EXPOSE 8080
 
 CMD ["python", "main.py"]

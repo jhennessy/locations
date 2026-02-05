@@ -1,6 +1,7 @@
 """NiceGUI web pages: login, registration, devices, map, visits, frequent places."""
 
 import datetime
+import os
 from nicegui import ui, app
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -36,6 +37,7 @@ def _nav_drawer(user=None):
         ui.link("Settings", "/settings").classes("q-pa-sm")
         if user and user.is_admin:
             ui.link("Admin", "/admin").classes("q-pa-sm")
+            ui.link("Logs", "/logs").classes("q-pa-sm")
 
 
 def _header(user):
@@ -212,6 +214,10 @@ def dashboard_page():
             ui.table(columns=columns, rows=rows).classes("w-full")
         else:
             ui.label("No location data yet. Connect a device to start tracking.").classes("text-grey")
+
+        commit_sha = os.environ.get("COMMIT_SHA", "")[:8]
+        if commit_sha:
+            ui.label(f"Build: {commit_sha}").classes("text-caption text-grey q-mt-lg")
 
     db.close()
 
@@ -736,4 +742,50 @@ def admin_page():
         inner_db.close()
 
     render_users()
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# Logs page — admin only
+# ---------------------------------------------------------------------------
+@ui.page("/logs")
+def logs_page():
+    db, user = get_session_user()
+    if user is None:
+        ui.navigate.to("/login")
+        return
+    if not user.is_admin:
+        ui.navigate.to("/")
+        return
+
+    _header(user)
+    _nav_drawer(user)
+
+    LOG_DIR = os.environ.get("LOG_DIR", "/data" if os.path.isdir("/data") else ".")
+    LOG_FILE = os.path.join(LOG_DIR, "location-tracker.log")
+
+    with ui.column().classes("q-pa-md w-full"):
+        ui.label("Server Logs").classes("text-h5 q-mb-md")
+
+        log_area = ui.textarea("").classes("w-full font-mono").props(
+            "readonly outlined autogrow"
+        ).style("min-height: 500px; font-size: 12px;")
+
+        def load_logs(tail_lines=200):
+            try:
+                with open(LOG_FILE, "r") as f:
+                    lines = f.readlines()
+                log_area.value = "".join(lines[-tail_lines:])
+            except FileNotFoundError:
+                log_area.value = "Log file not found."
+
+        with ui.row().classes("q-gutter-sm q-mb-md"):
+            ui.button("Refresh", on_click=lambda: load_logs()).props("icon=refresh")
+            ui.button("Last 50", on_click=lambda: load_logs(50)).props("flat")
+            ui.button("Last 200", on_click=lambda: load_logs(200)).props("flat")
+            ui.button("Last 500", on_click=lambda: load_logs(500)).props("flat")
+            ui.button("All", on_click=lambda: load_logs(100000)).props("flat")
+
+        load_logs()
+
     db.close()

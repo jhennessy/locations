@@ -1,6 +1,7 @@
 """REST API endpoints for the iOS app (authentication, devices, location uploads)."""
 
 import datetime
+import logging
 import os
 import uuid
 from functools import wraps
@@ -15,6 +16,8 @@ from auth import create_token, decode_token, hash_password, verify_password
 from database import get_db
 from models import Device, Location, Place, User, Visit
 from processing import process_device_locations
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -167,6 +170,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    logger.info("New user registered: %s (id=%d)", req.username, user.id)
     token = create_token(user.id, user.username)
     return TokenResponse(token=token, user_id=user.id, username=user.username)
 
@@ -175,7 +179,9 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username).first()
     if user is None or not verify_password(req.password, user.password_hash):
+        logger.warning("Failed login attempt for username: %s", req.username)
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    logger.info("User logged in: %s (id=%d)", user.username, user.id)
     token = create_token(user.id, user.username)
     return TokenResponse(token=token, user_id=user.id, username=user.username)
 
@@ -207,6 +213,7 @@ def create_device(req: DeviceCreate, user: User = Depends(get_current_user), db:
     db.add(device)
     db.commit()
     db.refresh(device)
+    logger.info("Device created: %s (id=%d) by user=%s", device.name, device.id, user.username)
     return DeviceResponse(id=device.id, name=device.name, identifier=device.identifier)
 
 
@@ -250,6 +257,11 @@ def upload_locations(batch: LocationBatch, user: User = Depends(get_current_user
 
     device.last_seen = now
     db.commit()
+
+    logger.info(
+        "Received %d locations from user=%s device=%d batch=%s",
+        len(batch.locations), user.username, device.id, batch_id,
+    )
 
     # Trigger visit detection pipeline
     new_visits = process_device_locations(db, device.id, user.id)
@@ -436,6 +448,7 @@ def change_password(
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     user.password_hash = hash_password(req.new_password)
     db.commit()
+    logger.info("Password changed for user=%s", user.username)
     return {"status": "password changed"}
 
 
@@ -476,6 +489,7 @@ def admin_update_user(
     if req.new_password:
         target.password_hash = hash_password(req.new_password)
     db.commit()
+    logger.info("Admin %s updated user %s (id=%d): active=%s admin=%s", admin.username, target.username, target.id, target.is_active, target.is_admin)
     return {"id": target.id, "username": target.username, "is_active": target.is_active, "is_admin": target.is_admin}
 
 
@@ -490,6 +504,7 @@ def admin_delete_user(
     target = db.query(User).filter(User.id == user_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
+    logger.info("Admin %s deleted user %s (id=%d)", admin.username, target.username, target.id)
     db.delete(target)
     db.commit()
 
@@ -510,12 +525,15 @@ def trigger_deploy(authorization: str = Header(...)):
     if not watchtower_token:
         raise HTTPException(status_code=503, detail="Watchtower not configured")
 
+    logger.info("Deploy triggered via API")
     try:
         resp = http_requests.post(
             "http://watchtower:8080/v1/update",
             headers={"Authorization": f"Bearer {watchtower_token}"},
-            timeout=10,
+            timeout=30,
         )
+        logger.info("Watchtower responded with status %d", resp.status_code)
         return {"status": "update triggered", "watchtower_status": resp.status_code}
     except http_requests.RequestException as e:
+        logger.error("Failed to reach Watchtower: %s", e)
         raise HTTPException(status_code=502, detail=f"Failed to reach Watchtower: {e}")

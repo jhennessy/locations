@@ -1,6 +1,9 @@
 """Database setup and session management using SQLAlchemy + SQLite."""
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -24,6 +27,7 @@ def init_db():
     """Create all tables, run migrations, and seed the default admin user."""
     from models import User, Device, Location, Place, Visit  # noqa: F401
 
+    logger.info("Initializing database at %s", DATABASE_URL)
     Base.metadata.create_all(bind=engine)
     _migrate()
     _seed_admin()
@@ -35,6 +39,7 @@ def _migrate():
     if "users" in insp.get_table_names():
         columns = {c["name"] for c in insp.get_columns("users")}
         if "is_admin" not in columns:
+            logger.info("Migrating: adding is_admin column to users table")
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
 
@@ -55,5 +60,6 @@ def _seed_admin():
             )
             db.add(admin)
             db.commit()
+            logger.info("Default admin user created")
     finally:
         db.close()
