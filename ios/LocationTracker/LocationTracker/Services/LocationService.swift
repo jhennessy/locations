@@ -48,9 +48,15 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.allowsBackgroundLocationUpdates = true
+        locationManager.showsBackgroundLocationIndicator = true
         locationManager.pausesLocationUpdatesAutomatically = false
         locationManager.distanceFilter = 10 // meters
         authorizationStatus = locationManager.authorizationStatus
+
+        // Auto-resume tracking if it was active before
+        if UserDefaults.standard.bool(forKey: "tracking_enabled"), deviceId != nil {
+            startTracking()
+        }
     }
 
     // MARK: - Permissions
@@ -65,12 +71,14 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard deviceId != nil else { return }
         locationManager.startUpdatingLocation()
         isTracking = true
+        UserDefaults.standard.set(true, forKey: "tracking_enabled")
         startFlushTimer()
     }
 
     func stopTracking() {
         locationManager.stopUpdatingLocation()
         isTracking = false
+        UserDefaults.standard.set(false, forKey: "tracking_enabled")
         flushTimer?.invalidate()
         flushTimer = nil
         // Flush remaining buffer
