@@ -2,7 +2,7 @@
 
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///locations.db")
@@ -21,11 +21,22 @@ def get_db():
 
 
 def init_db():
-    """Create all tables and seed the default admin user."""
+    """Create all tables, run migrations, and seed the default admin user."""
     from models import User, Device, Location, Place, Visit  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _migrate()
     _seed_admin()
+
+
+def _migrate():
+    """Add any missing columns to existing tables."""
+    insp = inspect(engine)
+    if "users" in insp.get_table_names():
+        columns = {c["name"] for c in insp.get_columns("users")}
+        if "is_admin" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
 
 
 def _seed_admin():
