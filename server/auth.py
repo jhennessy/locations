@@ -8,10 +8,11 @@ import datetime
 import hashlib
 import hmac
 import json
+import os
 import secrets
 from typing import Optional
 
-SECRET_KEY = secrets.token_hex(32)
+SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 TOKEN_EXPIRE_HOURS = 72
 
 

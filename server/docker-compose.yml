@@ -1,0 +1,27 @@
+services:
+  location-tracker:
+    image: ghcr.io/jhennessy/locations:latest
+    container_name: location-tracker
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - location-data:/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:////data/locations.db
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_CLEANUP=true
+    command: location-tracker
+
+volumes:
+  location-data:

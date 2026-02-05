@@ -27,8 +27,11 @@ enum APIError: LocalizedError {
 class APIService: ObservableObject {
     static let shared = APIService()
 
-    // MARK: - Change this to your server's address
-    var baseURL = "http://localhost:8080"
+    var baseURL: String {
+        didSet {
+            UserDefaults.standard.set(baseURL, forKey: "server_base_url")
+        }
+    }
 
     @Published var token: String? {
         didSet {
@@ -45,6 +48,7 @@ class APIService: ObservableObject {
     var isAuthenticated: Bool { token != nil }
 
     init() {
+        self.baseURL = UserDefaults.standard.string(forKey: "server_base_url") ?? "https://locations.codelook.ch"
         self.token = UserDefaults.standard.string(forKey: "auth_token")
     }
 

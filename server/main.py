@@ -1,5 +1,7 @@
 """Entry point: starts the NiceGUI server with the REST API mounted."""
 
+import os
+
 from nicegui import app, ui
 
 from api import router
@@ -17,6 +19,6 @@ import pages  # noqa: F401, E402
 ui.run(
     title="Location Tracker",
     port=8080,
-    storage_secret="change-me-in-production",
+    storage_secret=os.environ.get("STORAGE_SECRET", "change-me-in-production"),
     show=False,
 )

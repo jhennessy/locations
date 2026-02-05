@@ -19,6 +19,9 @@ struct SettingsView: View {
                         .onSubmit {
                             api.baseURL = serverURL
                         }
+                        .onChange(of: serverURL) { _, newValue in
+                            api.baseURL = newValue
+                        }
                 }
 
                 Section("Tracking") {
