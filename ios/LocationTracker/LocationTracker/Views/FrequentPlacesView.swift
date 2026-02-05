@@ -11,51 +11,51 @@ struct FrequentPlacesView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            ScrollView {
                 if isLoading {
                     ProgressView("Loading places...")
+                        .frame(maxWidth: .infinity, minHeight: 300)
                 } else if places.isEmpty {
                     ContentUnavailableView(
                         "No Frequent Places",
                         systemImage: "star.slash",
                         description: Text("Places visited two or more times will appear here.")
                     )
+                    .frame(maxWidth: .infinity, minHeight: 400)
                 } else {
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            // Map with all known places
-                            Map(position: $cameraPosition) {
-                                ForEach(places) { place in
-                                    Annotation(
-                                        place.displayName,
-                                        coordinate: .init(
-                                            latitude: place.latitude,
-                                            longitude: place.longitude
-                                        )
-                                    ) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(.orange)
-                                                .frame(width: 30, height: 30)
-                                            Text("\(place.visitCount)")
-                                                .font(.caption.bold())
-                                                .foregroundStyle(.white)
-                                        }
+                    VStack(spacing: 16) {
+                        // Map with all known places
+                        Map(position: $cameraPosition) {
+                            ForEach(places) { place in
+                                Annotation(
+                                    place.displayName,
+                                    coordinate: .init(
+                                        latitude: place.latitude,
+                                        longitude: place.longitude
+                                    )
+                                ) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(.orange)
+                                            .frame(width: 30, height: 30)
+                                        Text("\(place.visitCount)")
+                                            .font(.caption.bold())
+                                            .foregroundStyle(.white)
                                     }
                                 }
                             }
-                            .frame(height: 300)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .padding(.horizontal)
-
-                            // Ranked list
-                            LazyVStack(spacing: 8) {
-                                ForEach(Array(places.enumerated()), id: \.element.id) { index, place in
-                                    placeRow(place, rank: index + 1)
-                                }
-                            }
-                            .padding(.horizontal)
                         }
+                        .frame(height: 300)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .padding(.horizontal)
+
+                        // Ranked list
+                        LazyVStack(spacing: 8) {
+                            ForEach(Array(places.enumerated()), id: \.element.id) { index, place in
+                                placeRow(place, rank: index + 1)
+                            }
+                        }
+                        .padding(.horizontal)
                     }
                 }
             }

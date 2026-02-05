@@ -96,3 +96,31 @@ class Visit(Base):
 
     device = relationship("Device")
     place = relationship("Place", back_populates="visits")
+
+
+class Config(Base):
+    """Key-value store for algorithm thresholds and other settings."""
+
+    __tablename__ = "config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, nullable=False, index=True)
+    value = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class ReprocessingJob(Base):
+    """Journal entry tracking a data regeneration run."""
+
+    __tablename__ = "reprocessing_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(String, nullable=False, default="running")  # running, completed, failed
+    started_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+    error_message = Column(Text, nullable=True)
+    visits_created = Column(Integer, default=0)
+    places_created = Column(Integer, default=0)
+
+    user = relationship("User")

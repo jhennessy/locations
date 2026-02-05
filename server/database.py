@@ -25,12 +25,13 @@ def get_db():
 
 def init_db():
     """Create all tables, run migrations, and seed the default admin user."""
-    from models import User, Device, Location, Place, Visit  # noqa: F401
+    from models import User, Device, Location, Place, Visit, Config, ReprocessingJob  # noqa: F401
 
     logger.info("Initializing database at %s", DATABASE_URL)
     Base.metadata.create_all(bind=engine)
     _migrate()
     _seed_admin()
+    _seed_config()
 
 
 def _migrate():
@@ -61,5 +62,30 @@ def _seed_admin():
             db.add(admin)
             db.commit()
             logger.info("Default admin user created")
+    finally:
+        db.close()
+
+
+# Default algorithm thresholds (must match processing.py module-level constants)
+DEFAULT_THRESHOLDS = {
+    "max_horizontal_accuracy_m": "100.0",
+    "max_speed_ms": "85.0",
+    "min_point_interval_s": "2",
+    "visit_radius_m": "50.0",
+    "min_visit_duration_s": "300",
+    "place_snap_radius_m": "80.0",
+}
+
+
+def _seed_config():
+    """Insert default algorithm thresholds if not present."""
+    from models import Config
+
+    db = SessionLocal()
+    try:
+        for key, value in DEFAULT_THRESHOLDS.items():
+            if not db.query(Config).filter(Config.key == key).first():
+                db.add(Config(key=key, value=value))
+        db.commit()
     finally:
         db.close()

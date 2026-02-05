@@ -12,10 +12,14 @@ struct LazyView<Content: View>: View {
 struct ContentView: View {
     @EnvironmentObject var api: APIService
     @ObservedObject var locationService = LocationService.shared
+    @State private var isReady = false
 
     var body: some View {
         Group {
-            if !api.isAuthenticated {
+            if !isReady {
+                Text("Loading ...")
+                    .foregroundStyle(.secondary)
+            } else if !api.isAuthenticated {
                 LoginView()
             } else if locationService.deviceId == nil {
                 DeviceSelectionView()
@@ -42,6 +46,9 @@ struct ContentView: View {
                         }
                 }
             }
+        }
+        .task {
+            isReady = true
         }
     }
 }

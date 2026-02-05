@@ -7,8 +7,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from auth import create_token, hash_password, verify_password, decode_token
-from database import SessionLocal
-from models import User, Device, Location, Visit, Place
+from database import SessionLocal, DEFAULT_THRESHOLDS
+from models import User, Device, Location, Visit, Place, Config, ReprocessingJob
+from processing import reprocess_all
 
 
 def get_session_user() -> tuple[Session, User | None]:
@@ -24,20 +25,30 @@ def get_session_user() -> tuple[Session, User | None]:
     return db, user
 
 
+def _nav_link(icon: str, label: str, href: str):
+    """Render a navigation link with an icon."""
+    with ui.element("a").props(f'href="{href}"').classes(
+        "flex items-center gap-3 q-pa-sm q-pl-md no-underline text-dark"
+        " rounded-borders cursor-pointer hover:bg-blue-2"
+    ).style("text-decoration: none; transition: background 0.15s"):
+        ui.icon(icon).classes("text-blue-8")
+        ui.label(label)
+
+
 def _nav_drawer(user=None):
     """Shared left-drawer navigation."""
     with ui.left_drawer().classes("bg-blue-1"):
-        ui.label("Navigation").classes("text-h6 q-pa-sm")
-        ui.link("Dashboard", "/").classes("q-pa-sm")
-        ui.link("Devices", "/devices").classes("q-pa-sm")
-        ui.link("Map", "/map").classes("q-pa-sm")
-        ui.link("Visits", "/visits").classes("q-pa-sm")
-        ui.link("Frequent Places", "/places").classes("q-pa-sm")
-        ui.separator()
-        ui.link("Settings", "/settings").classes("q-pa-sm")
+        ui.label("Location Tracker").classes("text-h6 q-pa-sm q-mb-sm")
+        _nav_link("dashboard", "Dashboard", "/")
+        _nav_link("phone_iphone", "Devices", "/devices")
+        _nav_link("map", "Map", "/map")
+        _nav_link("place", "Visits", "/visits")
+        _nav_link("star", "Frequent Places", "/places")
+        ui.separator().classes("q-my-sm")
+        _nav_link("settings", "Settings", "/settings")
         if user and user.is_admin:
-            ui.link("Admin", "/admin").classes("q-pa-sm")
-            ui.link("Logs", "/logs").classes("q-pa-sm")
+            _nav_link("admin_panel_settings", "Admin", "/admin")
+            _nav_link("article", "Logs", "/logs")
 
 
 def _header(user):
@@ -631,8 +642,20 @@ def settings_page():
 
 
 # ---------------------------------------------------------------------------
-# Admin page — user management (admin only)
+# Admin page — user management + algorithm tuning (admin only)
 # ---------------------------------------------------------------------------
+
+# Threshold labels for the admin UI
+_THRESHOLD_LABELS = {
+    "max_horizontal_accuracy_m": ("Max GPS Accuracy (m)", "Discard points with accuracy worse than this"),
+    "max_speed_ms": ("Max Speed (m/s)", "Filter out physically impossible speeds (~306 km/h = 85)"),
+    "min_point_interval_s": ("Min Point Interval (s)", "Deduplicate points closer than this in time"),
+    "visit_radius_m": ("Visit Cluster Radius (m)", "Max radius for grouping stationary points"),
+    "min_visit_duration_s": ("Min Visit Duration (s)", "Minimum seconds to count as a visit (300 = 5 min)"),
+    "place_snap_radius_m": ("Place Snap Radius (m)", "Snap visit to existing place if within this distance"),
+}
+
+
 @ui.page("/admin")
 def admin_page():
     db, user = get_session_user()
@@ -646,7 +669,28 @@ def admin_page():
     _header(user)
     _nav_drawer(user)
 
-    users_container = ui.column().classes("q-pa-md w-full")
+    with ui.column().classes("q-pa-md w-full"):
+        ui.label("Administration").classes("text-h5 q-mb-md")
+
+        with ui.tabs().classes("w-full") as tabs:
+            users_tab = ui.tab("Users", icon="people")
+            algo_tab = ui.tab("Algorithm", icon="tune")
+
+        with ui.tab_panels(tabs, value=users_tab).classes("w-full"):
+            # ------ Users tab ------
+            with ui.tab_panel(users_tab):
+                _render_users_tab(user)
+
+            # ------ Algorithm tab ------
+            with ui.tab_panel(algo_tab):
+                _render_algorithm_tab(user)
+
+    db.close()
+
+
+def _render_users_tab(current_user):
+    """Users management tab content."""
+    users_container = ui.column().classes("w-full")
 
     def render_users():
         users_container.clear()
@@ -654,9 +698,6 @@ def admin_page():
         all_users = inner_db.query(User).order_by(User.id).all()
 
         with users_container:
-            ui.label("User Management").classes("text-h5 q-mb-md")
-
-            # User table
             for u in all_users:
                 with ui.card().classes("w-full q-mb-sm"):
                     with ui.row().classes("items-center justify-between w-full"):
@@ -697,7 +738,7 @@ def admin_page():
 
                             def make_delete(uid):
                                 def delete():
-                                    if uid == user.id:
+                                    if uid == current_user.id:
                                         ui.notify("Cannot delete yourself", type="warning")
                                         return
                                     tdb = SessionLocal()
@@ -709,7 +750,7 @@ def admin_page():
                                     render_users()
                                 return delete
 
-                            if u.id != user.id:
+                            if u.id != current_user.id:
                                 label = "Disable" if u.is_active else "Enable"
                                 ui.button(label, on_click=make_toggle_active(u.id, u.is_active)).props("flat")
                                 admin_label = "Remove Admin" if u.is_admin else "Make Admin"
@@ -719,7 +760,7 @@ def admin_page():
             # Reset password section
             ui.separator().classes("q-my-md")
             ui.label("Reset User Password").classes("text-h6 q-mb-sm")
-            user_options = {u.id: u.username for u in all_users if u.id != user.id}
+            user_options = {u.id: u.username for u in all_users if u.id != current_user.id}
             if user_options:
                 sel_user = ui.select(options=user_options, label="Select User").classes("w-64")
                 reset_pw = ui.input("New Password", password=True, password_toggle_button=True).classes("w-64")
@@ -742,7 +783,156 @@ def admin_page():
         inner_db.close()
 
     render_users()
-    db.close()
+
+
+def _render_algorithm_tab(current_user):
+    """Algorithm thresholds and data regeneration tab."""
+    # --- Threshold editor ---
+    ui.label("Detection Thresholds").classes("text-h6 q-mb-sm")
+    ui.label(
+        "These parameters control how GPS data is filtered and how visits and places are detected."
+    ).classes("text-caption text-grey q-mb-md")
+
+    inner_db = SessionLocal()
+    config_rows = inner_db.query(Config).all()
+    current_values = {r.key: r.value for r in config_rows}
+    inner_db.close()
+
+    inputs = {}
+    with ui.card().classes("w-full q-mb-lg"):
+        for key in _THRESHOLD_LABELS:
+            label, hint = _THRESHOLD_LABELS[key]
+            val = float(current_values.get(key, DEFAULT_THRESHOLDS[key]))
+            inp = ui.number(label, value=val).classes("w-full").tooltip(hint)
+            inputs[key] = inp
+
+        with ui.row().classes("q-mt-md q-gutter-sm"):
+            def save_thresholds():
+                tdb = SessionLocal()
+                for key, inp in inputs.items():
+                    row = tdb.query(Config).filter(Config.key == key).first()
+                    if row:
+                        row.value = str(inp.value)
+                    else:
+                        tdb.add(Config(key=key, value=str(inp.value)))
+                tdb.commit()
+                tdb.close()
+                ui.notify("Thresholds saved", type="positive")
+
+            def reset_defaults():
+                tdb = SessionLocal()
+                for key, default_val in DEFAULT_THRESHOLDS.items():
+                    row = tdb.query(Config).filter(Config.key == key).first()
+                    if row:
+                        row.value = default_val
+                tdb.commit()
+                tdb.close()
+                for key, inp in inputs.items():
+                    inp.value = float(DEFAULT_THRESHOLDS[key])
+                ui.notify("Reset to defaults", type="info")
+
+            ui.button("Save Thresholds", on_click=save_thresholds).props("color=primary")
+            ui.button("Reset to Defaults", on_click=reset_defaults).props("flat")
+
+    # --- Regeneration ---
+    ui.separator().classes("q-my-md")
+    ui.label("Data Regeneration").classes("text-h6 q-mb-sm")
+    ui.label(
+        "Delete all detected visits and places, then reprocess all location data "
+        "using the current thresholds. This may take a while for large datasets."
+    ).classes("text-caption text-grey q-mb-md")
+
+    journal_container = ui.column().classes("w-full")
+
+    def render_journal():
+        journal_container.clear()
+        jdb = SessionLocal()
+        jobs = (
+            jdb.query(ReprocessingJob)
+            .filter(ReprocessingJob.user_id == current_user.id)
+            .order_by(ReprocessingJob.started_at.desc())
+            .limit(10)
+            .all()
+        )
+
+        with journal_container:
+            if jobs:
+                rows = []
+                for j in jobs:
+                    rows.append({
+                        "id": j.id,
+                        "status": j.status,
+                        "started": j.started_at.strftime("%Y-%m-%d %H:%M:%S") if j.started_at else "-",
+                        "finished": j.finished_at.strftime("%Y-%m-%d %H:%M:%S") if j.finished_at else "-",
+                        "visits": j.visits_created,
+                        "places": j.places_created,
+                        "error": j.error_message or "",
+                    })
+                columns = [
+                    {"name": "status", "label": "Status", "field": "status"},
+                    {"name": "started", "label": "Started", "field": "started"},
+                    {"name": "finished", "label": "Finished", "field": "finished"},
+                    {"name": "visits", "label": "Visits", "field": "visits"},
+                    {"name": "places", "label": "Places", "field": "places"},
+                    {"name": "error", "label": "Error", "field": "error"},
+                ]
+                ui.table(columns=columns, rows=rows).classes("w-full")
+            else:
+                ui.label("No regeneration jobs yet.").classes("text-grey")
+
+        jdb.close()
+
+    def do_regenerate():
+        import datetime as dt
+
+        jdb = SessionLocal()
+        job = ReprocessingJob(
+            user_id=current_user.id,
+            status="running",
+            started_at=dt.datetime.utcnow(),
+        )
+        jdb.add(job)
+        jdb.commit()
+        jdb.refresh(job)
+        job_id = job.id
+        jdb.close()
+
+        render_journal()
+        ui.notify("Regeneration started...", type="info")
+
+        try:
+            rdb = SessionLocal()
+            result = reprocess_all(rdb, current_user.id)
+
+            job = rdb.query(ReprocessingJob).filter(ReprocessingJob.id == job_id).first()
+            job.status = "completed"
+            job.finished_at = dt.datetime.utcnow()
+            job.visits_created = result["visits_created"]
+            job.places_created = result["places_created"]
+            rdb.commit()
+            rdb.close()
+
+            ui.notify(
+                f"Regeneration complete: {result['visits_created']} visits, "
+                f"{result['places_created']} places",
+                type="positive",
+            )
+        except Exception as e:
+            rdb = SessionLocal()
+            job = rdb.query(ReprocessingJob).filter(ReprocessingJob.id == job_id).first()
+            if job:
+                job.status = "failed"
+                job.finished_at = dt.datetime.utcnow()
+                job.error_message = str(e)
+                rdb.commit()
+            rdb.close()
+            ui.notify(f"Regeneration failed: {e}", type="negative")
+
+        render_journal()
+
+    ui.button("Regenerate All Data", on_click=do_regenerate).props("color=negative icon=refresh")
+    ui.label("").classes("q-mb-md")
+    render_journal()
 
 
 # ---------------------------------------------------------------------------
