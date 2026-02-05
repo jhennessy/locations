@@ -6,7 +6,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - location-data:/data
+      - ./data:/data
     env_file:
       - .env
     environment:
@@ -26,6 +26,3 @@ services:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_POLL_INTERVAL=86400
     command: location-tracker
-
-volumes:
-  location-data:
