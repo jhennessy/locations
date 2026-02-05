@@ -1,10 +1,12 @@
 """REST API endpoints for the iOS app (authentication, devices, location uploads)."""
 
 import datetime
+import os
 import uuid
 from functools import wraps
 from typing import Optional
 
+import requests as http_requests
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -389,3 +391,30 @@ def update_place_name(
     place.name = body.get("name", place.name)
     db.commit()
     return {"id": place.id, "name": place.name}
+
+
+# ---------------------------------------------------------------------------
+# Deploy endpoint (triggered by GitHub Actions → tells Watchtower to update)
+# ---------------------------------------------------------------------------
+
+@router.post("/deploy")
+def trigger_deploy(authorization: str = Header(...)):
+    deploy_token = os.environ.get("DEPLOY_TOKEN")
+    if not deploy_token:
+        raise HTTPException(status_code=503, detail="Deploy not configured")
+    if authorization != f"Bearer {deploy_token}":
+        raise HTTPException(status_code=401, detail="Invalid deploy token")
+
+    watchtower_token = os.environ.get("WATCHTOWER_TOKEN")
+    if not watchtower_token:
+        raise HTTPException(status_code=503, detail="Watchtower not configured")
+
+    try:
+        resp = http_requests.post(
+            "http://watchtower:8080/v1/update",
+            headers={"Authorization": f"Bearer {watchtower_token}"},
+            timeout=10,
+        )
+        return {"status": "update triggered", "watchtower_status": resp.status_code}
+    except http_requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to reach Watchtower: {e}")

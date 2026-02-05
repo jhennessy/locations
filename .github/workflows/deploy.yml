@@ -33,3 +33,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Trigger deploy
+        run: |
+          curl -sf -X POST https://locations.codelook.ch/api/deploy \
+            -H "Authorization: Bearer ${{ secrets.DEPLOY_TOKEN }}"
