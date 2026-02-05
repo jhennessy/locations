@@ -20,6 +20,6 @@ def get_db():
 
 def init_db():
     """Create all tables."""
-    from models import User, Device, Location  # noqa: F401
+    from models import User, Device, Location, Place, Visit  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

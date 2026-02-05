@@ -17,6 +17,18 @@ struct LocationPoint: Codable {
         case verticalAccuracy = "vertical_accuracy"
     }
 
+    init(latitude: Double, longitude: Double, altitude: Double?, horizontalAccuracy: Double?,
+         verticalAccuracy: Double?, speed: Double?, course: Double?, timestamp: String) {
+        self.latitude = latitude
+        self.longitude = longitude
+        self.altitude = altitude
+        self.horizontalAccuracy = horizontalAccuracy
+        self.verticalAccuracy = verticalAccuracy
+        self.speed = speed
+        self.course = course
+        self.timestamp = timestamp
+    }
+
     init(from clLocation: CLLocation) {
         self.latitude = clLocation.coordinate.latitude
         self.longitude = clLocation.coordinate.longitude

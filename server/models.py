@@ -1,7 +1,7 @@
-"""SQLAlchemy models for users, devices, and locations."""
+"""SQLAlchemy models for users, devices, locations, visits, and places."""
 
 import datetime
-from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, Boolean, Text
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -51,3 +51,47 @@ class Location(Base):
     batch_id = Column(String, nullable=True, index=True)
 
     device = relationship("Device", back_populates="locations")
+
+
+class Place(Base):
+    """A canonical location that the user has visited at least once.
+
+    When a new visit is detected, it is snapped to the nearest existing Place
+    within a threshold radius, or a new Place is created.
+    """
+
+    __tablename__ = "places"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    name = Column(String, nullable=True)
+    address = Column(Text, nullable=True)
+    visit_count = Column(Integer, default=0)
+    total_duration_seconds = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    owner = relationship("User")
+    visits = relationship("Visit", back_populates="place", cascade="all, delete-orphan")
+
+
+class Visit(Base):
+    """A detected stay at a Place (duration >= 5 minutes)."""
+
+    __tablename__ = "visits"
+
+    id = Column(Integer, primary_key=True, index=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False)
+    place_id = Column(Integer, ForeignKey("places.id"), nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    arrival = Column(DateTime, nullable=False)
+    departure = Column(DateTime, nullable=False)
+    duration_seconds = Column(Integer, nullable=False)
+    address = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    device = relationship("Device")
+    place = relationship("Place", back_populates="visits")

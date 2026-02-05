@@ -139,4 +139,23 @@ class APIService: ObservableObject {
         let data = try await makeRequest(path: "/api/locations", method: "POST", body: body)
         return try JSONDecoder().decode(BatchResponse.self, from: data)
     }
+
+    // MARK: - Visits
+
+    func fetchVisits(deviceId: Int, limit: Int = 100) async throws -> [VisitInfo] {
+        let data = try await makeRequest(path: "/api/visits/\(deviceId)?limit=\(limit)", method: "GET")
+        return try JSONDecoder().decode([VisitInfo].self, from: data)
+    }
+
+    // MARK: - Places
+
+    func fetchPlaces() async throws -> [PlaceInfo] {
+        let data = try await makeRequest(path: "/api/places", method: "GET")
+        return try JSONDecoder().decode([PlaceInfo].self, from: data)
+    }
+
+    func fetchFrequentPlaces(limit: Int = 20) async throws -> [PlaceInfo] {
+        let data = try await makeRequest(path: "/api/places/frequent?limit=\(limit)", method: "GET")
+        return try JSONDecoder().decode([PlaceInfo].self, from: data)
+    }
 }

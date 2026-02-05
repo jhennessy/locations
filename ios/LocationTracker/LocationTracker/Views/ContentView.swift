@@ -17,6 +17,16 @@ struct ContentView: View {
                             Label("Tracking", systemImage: "location.fill")
                         }
 
+                    VisitsView()
+                        .tabItem {
+                            Label("Visits", systemImage: "mappin.and.ellipse")
+                        }
+
+                    FrequentPlacesView()
+                        .tabItem {
+                            Label("Places", systemImage: "star.fill")
+                        }
+
                     SettingsView()
                         .tabItem {
                             Label("Settings", systemImage: "gear")

@@ -1,3 +1,5 @@
 nicegui>=1.4.0
 sqlalchemy>=2.0
-pyjwt>=2.8
+requests>=2.31
+pytest>=7.0
+httpx>=0.25

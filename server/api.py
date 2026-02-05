@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from auth import create_token, decode_token, hash_password, verify_password
 from database import get_db
-from models import Device, Location, User
+from models import Device, Location, Place, User, Visit
+from processing import process_device_locations
 
 router = APIRouter(prefix="/api")
 
@@ -71,6 +72,35 @@ class LocationBatch(BaseModel):
 class BatchResponse(BaseModel):
     received: int
     batch_id: str
+    visits_detected: int = 0
+
+
+class VisitResponse(BaseModel):
+    id: int
+    device_id: int
+    place_id: int
+    latitude: float
+    longitude: float
+    arrival: str
+    departure: str
+    duration_seconds: int
+    address: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PlaceResponse(BaseModel):
+    id: int
+    latitude: float
+    longitude: float
+    name: Optional[str] = None
+    address: Optional[str] = None
+    visit_count: int
+    total_duration_seconds: int
+
+    class Config:
+        from_attributes = True
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +220,10 @@ def upload_locations(batch: LocationBatch, user: User = Depends(get_current_user
     device.last_seen = now
     db.commit()
 
-    return BatchResponse(received=len(batch.locations), batch_id=batch_id)
+    # Trigger visit detection pipeline
+    new_visits = process_device_locations(db, device.id, user.id)
+
+    return BatchResponse(received=len(batch.locations), batch_id=batch_id, visits_detected=len(new_visits))
 
 
 @router.get("/locations/{device_id}")
@@ -228,3 +261,131 @@ def get_locations(
         }
         for loc in locations
     ]
+
+
+# ---------------------------------------------------------------------------
+# Visit endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/visits/{device_id}", response_model=list[VisitResponse])
+def get_visits(
+    device_id: int,
+    limit: int = 100,
+    offset: int = 0,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    device = db.query(Device).filter(Device.id == device_id, Device.user_id == user.id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found or not owned by user")
+
+    visits = (
+        db.query(Visit)
+        .filter(Visit.device_id == device_id)
+        .order_by(Visit.arrival.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        VisitResponse(
+            id=v.id,
+            device_id=v.device_id,
+            place_id=v.place_id,
+            latitude=v.latitude,
+            longitude=v.longitude,
+            arrival=v.arrival.isoformat(),
+            departure=v.departure.isoformat(),
+            duration_seconds=v.duration_seconds,
+            address=v.address,
+        )
+        for v in visits
+    ]
+
+
+@router.post("/visits/{device_id}/reprocess")
+def reprocess_visits(
+    device_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete existing visits for a device and reprocess all locations."""
+    device = db.query(Device).filter(Device.id == device_id, Device.user_id == user.id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found or not owned by user")
+
+    db.query(Visit).filter(Visit.device_id == device_id).delete()
+    db.commit()
+
+    new_visits = process_device_locations(db, device.id, user.id)
+    return {"reprocessed": True, "visits_detected": len(new_visits)}
+
+
+# ---------------------------------------------------------------------------
+# Place endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/places", response_model=list[PlaceResponse])
+def get_places(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    places = (
+        db.query(Place)
+        .filter(Place.user_id == user.id)
+        .order_by(Place.visit_count.desc())
+        .all()
+    )
+    return [
+        PlaceResponse(
+            id=p.id,
+            latitude=p.latitude,
+            longitude=p.longitude,
+            name=p.name,
+            address=p.address,
+            visit_count=p.visit_count,
+            total_duration_seconds=p.total_duration_seconds,
+        )
+        for p in places
+    ]
+
+
+@router.get("/places/frequent", response_model=list[PlaceResponse])
+def get_frequent_places(
+    limit: int = 20,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return the most frequently visited places, ordered by visit count."""
+    places = (
+        db.query(Place)
+        .filter(Place.user_id == user.id, Place.visit_count >= 2)
+        .order_by(Place.visit_count.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        PlaceResponse(
+            id=p.id,
+            latitude=p.latitude,
+            longitude=p.longitude,
+            name=p.name,
+            address=p.address,
+            visit_count=p.visit_count,
+            total_duration_seconds=p.total_duration_seconds,
+        )
+        for p in places
+    ]
+
+
+@router.put("/places/{place_id}/name")
+def update_place_name(
+    place_id: int,
+    body: dict,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    place = db.query(Place).filter(Place.id == place_id, Place.user_id == user.id).first()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+    place.name = body.get("name", place.name)
+    db.commit()
+    return {"id": place.id, "name": place.name}
