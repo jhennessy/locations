@@ -36,5 +36,5 @@ jobs:
 
       - name: Trigger deploy
         run: |
-          curl -sf -X POST https://locations.codelook.ch/api/deploy \
+          curl -s -w "\nHTTP status: %{http_code}\n" -X POST https://locations.codelook.ch/api/deploy \
             -H "Authorization: Bearer ${{ secrets.DEPLOY_TOKEN }}"
