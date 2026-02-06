@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">Location Tracker</string>
+    <string name="tracking_channel_name">Location Tracking</string>
+    <string name="tracking_channel_description">Shows when location tracking is active</string>
+    <string name="tracking_notification_title">Location Tracker</string>
+</resources>
