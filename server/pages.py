@@ -2,14 +2,35 @@
 
 import datetime
 import os
+from zoneinfo import ZoneInfo
 from nicegui import ui, app
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from auth import create_token, hash_password, verify_password, decode_token
-from database import SessionLocal, DEFAULT_THRESHOLDS
+from database import SessionLocal, DEFAULT_THRESHOLDS, DEFAULT_SETTINGS
 from models import User, Device, Location, Visit, Place, Config, ReprocessingJob
 from processing import reprocess_all
+
+
+def _get_tz() -> ZoneInfo:
+    """Load the configured timezone from the DB."""
+    db = SessionLocal()
+    row = db.query(Config).filter(Config.key == "timezone").first()
+    db.close()
+    name = row.value if row else DEFAULT_SETTINGS["timezone"]
+    try:
+        return ZoneInfo(name)
+    except KeyError:
+        return ZoneInfo("UTC")
+
+
+def _fmt(dt: datetime.datetime | None, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """Format a naive-UTC datetime in the configured local timezone."""
+    if dt is None:
+        return "-"
+    utc_dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return utc_dt.astimezone(_get_tz()).strftime(fmt)
 
 
 def get_session_user() -> tuple[Session, User | None]:
@@ -210,8 +231,8 @@ def dashboard_page():
                     "device": loc.device.name,
                     "lat": f"{loc.latitude:.6f}",
                     "lon": f"{loc.longitude:.6f}",
-                    "time": loc.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                    "received": loc.received_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    "time": _fmt(loc.timestamp),
+                    "received": _fmt(loc.received_at),
                     "notes": loc.notes or "",
                 }
                 for loc in recent
@@ -287,7 +308,7 @@ def devices_page():
                             ui.label(f"ID: {d.identifier}").classes("text-caption text-grey")
                             ui.label(f"{loc_count} points | {visit_count} visits").classes("text-caption")
                             if d.last_seen:
-                                ui.label(f"Last seen: {d.last_seen.strftime('%Y-%m-%d %H:%M')}").classes(
+                                ui.label(f"Last seen: {_fmt(d.last_seen, '%Y-%m-%d %H:%M')}").classes(
                                     "text-caption text-grey"
                                 )
 
@@ -373,7 +394,7 @@ def map_page():
                             f"{latest.latitude:.6f}, {latest.longitude:.6f}"
                         ).classes("text-caption")
                         ui.label(
-                            f"({latest.timestamp.strftime('%Y-%m-%d %H:%M:%S')})"
+                            f"({_fmt(latest.timestamp)})"
                         ).classes("text-caption text-grey")
 
                 m = ui.leaflet(center=(center_lat, center_lon), zoom=14).classes("w-full").style("height: 500px")
@@ -401,7 +422,7 @@ def map_page():
                         "alt": f"{loc.altitude:.1f}" if loc.altitude else "-",
                         "speed": f"{loc.speed:.1f}" if loc.speed else "-",
                         "acc": f"{loc.horizontal_accuracy:.0f}m" if loc.horizontal_accuracy else "-",
-                        "time": loc.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                        "time": _fmt(loc.timestamp),
                     }
                     for loc in locations[:50]
                 ]
@@ -487,8 +508,8 @@ def visits_page():
                 rows = [
                     {
                         "address": v.address or f"{v.latitude:.5f}, {v.longitude:.5f}",
-                        "arrival": v.arrival.strftime("%Y-%m-%d %H:%M"),
-                        "departure": v.departure.strftime("%H:%M"),
+                        "arrival": _fmt(v.arrival, "%Y-%m-%d %H:%M"),
+                        "departure": _fmt(v.departure, "%H:%M"),
                         "duration": _format_duration(v.duration_seconds),
                         "place_id": v.place_id,
                     }
@@ -678,6 +699,7 @@ def admin_page():
         with ui.tabs().classes("w-full") as tabs:
             users_tab = ui.tab("Users", icon="people")
             algo_tab = ui.tab("Algorithm", icon="tune")
+            settings_tab = ui.tab("Settings", icon="settings")
 
         with ui.tab_panels(tabs, value=users_tab).classes("w-full"):
             # ------ Users tab ------
@@ -687,6 +709,10 @@ def admin_page():
             # ------ Algorithm tab ------
             with ui.tab_panel(algo_tab):
                 _render_algorithm_tab(user)
+
+            # ------ Settings tab ------
+            with ui.tab_panel(settings_tab):
+                _render_settings_tab()
 
     db.close()
 
@@ -713,7 +739,7 @@ def _render_users_tab(current_user):
                                     ui.badge("disabled", color="red")
                             ui.label(f"{u.email}").classes("text-caption text-grey")
                             ui.label(
-                                f"Created: {u.created_at.strftime('%Y-%m-%d %H:%M') if u.created_at else 'N/A'}"
+                                f"Created: {_fmt(u.created_at, '%Y-%m-%d %H:%M')}"
                             ).classes("text-caption text-grey")
 
                         with ui.row().classes("q-gutter-sm"):
@@ -865,8 +891,8 @@ def _render_algorithm_tab(current_user):
                     rows.append({
                         "id": j.id,
                         "status": j.status,
-                        "started": j.started_at.strftime("%Y-%m-%d %H:%M:%S") if j.started_at else "-",
-                        "finished": j.finished_at.strftime("%Y-%m-%d %H:%M:%S") if j.finished_at else "-",
+                        "started": _fmt(j.started_at),
+                        "finished": _fmt(j.finished_at),
                         "visits": j.visits_created,
                         "places": j.places_created,
                         "error": j.error_message or "",
@@ -936,6 +962,41 @@ def _render_algorithm_tab(current_user):
     ui.button("Regenerate All Data", on_click=do_regenerate).props("color=negative icon=refresh")
     ui.label("").classes("q-mb-md")
     render_journal()
+
+
+def _render_settings_tab():
+    """General settings tab (timezone, etc.)."""
+    ui.label("Timezone").classes("text-h6 q-mb-sm")
+    ui.label(
+        "All times on the web interface are displayed in this timezone."
+    ).classes("text-caption text-grey q-mb-md")
+
+    inner_db = SessionLocal()
+    row = inner_db.query(Config).filter(Config.key == "timezone").first()
+    current_tz = row.value if row else DEFAULT_SETTINGS["timezone"]
+    inner_db.close()
+
+    tz_input = ui.input("Timezone (IANA)", value=current_tz).classes("w-64").tooltip(
+        "e.g. Europe/Dublin, America/New_York, US/Pacific"
+    )
+
+    def save_tz():
+        try:
+            ZoneInfo(tz_input.value)
+        except KeyError:
+            ui.notify(f"Unknown timezone: {tz_input.value}", type="negative")
+            return
+        tdb = SessionLocal()
+        r = tdb.query(Config).filter(Config.key == "timezone").first()
+        if r:
+            r.value = tz_input.value
+        else:
+            tdb.add(Config(key="timezone", value=tz_input.value))
+        tdb.commit()
+        tdb.close()
+        ui.notify(f"Timezone set to {tz_input.value}", type="positive")
+
+    ui.button("Save", on_click=save_tz).classes("q-mt-sm")
 
 
 # ---------------------------------------------------------------------------
