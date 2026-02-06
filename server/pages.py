@@ -8,29 +8,32 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from auth import create_token, hash_password, verify_password, decode_token
-from database import SessionLocal, DEFAULT_THRESHOLDS, DEFAULT_SETTINGS
+from database import SessionLocal, DEFAULT_THRESHOLDS
 from models import User, Device, Location, Visit, Place, Config, ReprocessingJob
 from processing import reprocess_all
 
 
-def _get_tz() -> ZoneInfo:
-    """Load the configured timezone from the DB."""
-    db = SessionLocal()
-    row = db.query(Config).filter(Config.key == "timezone").first()
-    db.close()
-    name = row.value if row else DEFAULT_SETTINGS["timezone"]
-    try:
-        return ZoneInfo(name)
-    except KeyError:
-        return ZoneInfo("UTC")
+async def _ensure_timezone():
+    """Detect browser timezone via JS and store in the user session."""
+    if "timezone" not in app.storage.user:
+        tz = await ui.run_javascript(
+            "Intl.DateTimeFormat().resolvedOptions().timeZone"
+        )
+        if tz:
+            app.storage.user["timezone"] = tz
 
 
 def _fmt(dt: datetime.datetime | None, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
-    """Format a naive-UTC datetime in the configured local timezone."""
+    """Format a naive-UTC datetime in the browser's local timezone."""
     if dt is None:
         return "-"
+    tz_name = app.storage.user.get("timezone", "UTC")
+    try:
+        tz = ZoneInfo(tz_name)
+    except KeyError:
+        tz = ZoneInfo("UTC")
     utc_dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-    return utc_dt.astimezone(_get_tz()).strftime(fmt)
+    return utc_dt.astimezone(tz).strftime(fmt)
 
 
 def get_session_user() -> tuple[Session, User | None]:
@@ -105,7 +108,9 @@ def _format_duration(seconds: int) -> str:
 # Login page
 # ---------------------------------------------------------------------------
 @ui.page("/login")
-def login_page():
+async def login_page():
+    await _ensure_timezone()
+
     def do_login():
         db = SessionLocal()
         user = db.query(User).filter(User.username == username.value).first()
@@ -134,7 +139,9 @@ def login_page():
 # Registration page
 # ---------------------------------------------------------------------------
 @ui.page("/register")
-def register_page():
+async def register_page():
+    await _ensure_timezone()
+
     def do_register():
         if not username.value or not email.value or not password.value:
             ui.notify("All fields are required", type="warning")
@@ -181,7 +188,8 @@ def register_page():
 # Dashboard (home)
 # ---------------------------------------------------------------------------
 @ui.page("/")
-def dashboard_page():
+async def dashboard_page():
+    await _ensure_timezone()
     db, user = get_session_user()
     if user is None:
         ui.navigate.to("/login")
@@ -260,7 +268,8 @@ def dashboard_page():
 # Device management page
 # ---------------------------------------------------------------------------
 @ui.page("/devices")
-def devices_page():
+async def devices_page():
+    await _ensure_timezone()
     db, user = get_session_user()
     if user is None:
         ui.navigate.to("/login")
@@ -334,7 +343,8 @@ def devices_page():
 # Map page — shows current/latest location per device
 # ---------------------------------------------------------------------------
 @ui.page("/map")
-def map_page():
+async def map_page():
+    await _ensure_timezone()
     db, user = get_session_user()
     if user is None:
         ui.navigate.to("/login")
@@ -448,7 +458,8 @@ def map_page():
 # Visits page
 # ---------------------------------------------------------------------------
 @ui.page("/visits")
-def visits_page():
+async def visits_page():
+    await _ensure_timezone()
     db, user = get_session_user()
     if user is None:
         ui.navigate.to("/login")
@@ -535,7 +546,8 @@ def visits_page():
 # Frequent Places page
 # ---------------------------------------------------------------------------
 @ui.page("/places")
-def places_page():
+async def places_page():
+    await _ensure_timezone()
     db, user = get_session_user()
     if user is None:
         ui.navigate.to("/login")
@@ -620,7 +632,8 @@ def places_page():
 # Settings page — change password
 # ---------------------------------------------------------------------------
 @ui.page("/settings")
-def settings_page():
+async def settings_page():
+    await _ensure_timezone()
     db, user = get_session_user()
     if user is None:
         ui.navigate.to("/login")
@@ -681,7 +694,8 @@ _THRESHOLD_LABELS = {
 
 
 @ui.page("/admin")
-def admin_page():
+async def admin_page():
+    await _ensure_timezone()
     db, user = get_session_user()
     if user is None:
         ui.navigate.to("/login")
@@ -699,7 +713,6 @@ def admin_page():
         with ui.tabs().classes("w-full") as tabs:
             users_tab = ui.tab("Users", icon="people")
             algo_tab = ui.tab("Algorithm", icon="tune")
-            settings_tab = ui.tab("Settings", icon="settings")
 
         with ui.tab_panels(tabs, value=users_tab).classes("w-full"):
             # ------ Users tab ------
@@ -709,10 +722,6 @@ def admin_page():
             # ------ Algorithm tab ------
             with ui.tab_panel(algo_tab):
                 _render_algorithm_tab(user)
-
-            # ------ Settings tab ------
-            with ui.tab_panel(settings_tab):
-                _render_settings_tab()
 
     db.close()
 
@@ -964,46 +973,12 @@ def _render_algorithm_tab(current_user):
     render_journal()
 
 
-def _render_settings_tab():
-    """General settings tab (timezone, etc.)."""
-    ui.label("Timezone").classes("text-h6 q-mb-sm")
-    ui.label(
-        "All times on the web interface are displayed in this timezone."
-    ).classes("text-caption text-grey q-mb-md")
-
-    inner_db = SessionLocal()
-    row = inner_db.query(Config).filter(Config.key == "timezone").first()
-    current_tz = row.value if row else DEFAULT_SETTINGS["timezone"]
-    inner_db.close()
-
-    tz_input = ui.input("Timezone (IANA)", value=current_tz).classes("w-64").tooltip(
-        "e.g. Europe/Dublin, America/New_York, US/Pacific"
-    )
-
-    def save_tz():
-        try:
-            ZoneInfo(tz_input.value)
-        except KeyError:
-            ui.notify(f"Unknown timezone: {tz_input.value}", type="negative")
-            return
-        tdb = SessionLocal()
-        r = tdb.query(Config).filter(Config.key == "timezone").first()
-        if r:
-            r.value = tz_input.value
-        else:
-            tdb.add(Config(key="timezone", value=tz_input.value))
-        tdb.commit()
-        tdb.close()
-        ui.notify(f"Timezone set to {tz_input.value}", type="positive")
-
-    ui.button("Save", on_click=save_tz).classes("q-mt-sm")
-
-
 # ---------------------------------------------------------------------------
 # Logs page — admin only
 # ---------------------------------------------------------------------------
 @ui.page("/logs")
-def logs_page():
+async def logs_page():
+    await _ensure_timezone()
     db, user = get_session_user()
     if user is None:
         ui.navigate.to("/login")

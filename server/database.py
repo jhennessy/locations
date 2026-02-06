@@ -85,18 +85,13 @@ DEFAULT_THRESHOLDS = {
 }
 
 
-DEFAULT_SETTINGS = {
-    "timezone": "Europe/Dublin",
-}
-
-
 def _seed_config():
-    """Insert default algorithm thresholds and settings if not present."""
+    """Insert default algorithm thresholds if not present."""
     from models import Config
 
     db = SessionLocal()
     try:
-        for key, value in {**DEFAULT_THRESHOLDS, **DEFAULT_SETTINGS}.items():
+        for key, value in DEFAULT_THRESHOLDS.items():
             if not db.query(Config).filter(Config.key == key).first():
                 db.add(Config(key=key, value=value))
         db.commit()
