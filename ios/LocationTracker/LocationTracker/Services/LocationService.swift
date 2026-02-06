@@ -218,9 +218,11 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         trackingMode = .stationary
 
-        // Low-power mode: significant changes only
-        locationManager.stopUpdatingLocation()
-        locationManager.startMonitoringSignificantLocationChanges()
+        // Low-power mode: keep location updates active at minimal accuracy
+        // so the app stays alive in the background and CoreMotion can deliver
+        // activity updates when movement resumes.
+        locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+        locationManager.distanceFilter = 500
 
         recordStateChange("→ Stationary (\(accuracy)): \(reason)")
     }
