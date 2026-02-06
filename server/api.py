@@ -526,11 +526,12 @@ def trigger_deploy(authorization: str = Header(...)):
     watchtower_token = os.environ.get("WATCHTOWER_TOKEN")
     if not watchtower_token:
         raise HTTPException(status_code=503, detail="Watchtower not configured")
+    watchtower_url = os.environ.get("WATCHTOWER_URL", "http://watchtower:8080")
 
     logger.info("Deploy triggered via API")
     try:
         resp = http_requests.post(
-            "http://watchtower:8080/v1/update",
+            f"{watchtower_url}/v1/update",
             headers={"Authorization": f"Bearer {watchtower_token}"},
             timeout=30,
         )

@@ -11,18 +11,4 @@ services:
       - .env
     environment:
       - DATABASE_URL=sqlite:////data/locations.db
-
-  watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    expose:
-      - "8080"
-    environment:
-      - WATCHTOWER_HTTP_API_UPDATE=true
-      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_TOKEN}
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_POLL_INTERVAL=86400
-    command: location-tracker
+      - WATCHTOWER_URL=http://host.docker.internal:8181
