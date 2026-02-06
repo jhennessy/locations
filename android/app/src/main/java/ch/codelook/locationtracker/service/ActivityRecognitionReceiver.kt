@@ -13,10 +13,9 @@ class ActivityRecognitionReceiver : BroadcastReceiver() {
         val result = ActivityTransitionResult.extractResult(intent) ?: return
 
         for (event in result.transitionEvents) {
-            // Forward to the service via a broadcast or direct service call
             val serviceIntent = Intent(context, LocationTrackingService::class.java).apply {
-                putExtra("activity_type", event.activityType)
-                putExtra("transition_type", event.transitionType)
+                putExtra(LocationTrackingService.EXTRA_ACTIVITY_TYPE, event.activityType)
+                putExtra(LocationTrackingService.EXTRA_TRANSITION_TYPE, event.transitionType)
             }
             context.startForegroundService(serviceIntent)
         }

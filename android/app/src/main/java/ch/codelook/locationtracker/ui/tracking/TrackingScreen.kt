@@ -1,7 +1,7 @@
 package ch.codelook.locationtracker.ui.tracking
 
 import android.Manifest
-import android.os.Build
+import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -31,20 +32,75 @@ fun TrackingScreen(
     viewModel: TrackingViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+    var pendingStart by remember { mutableStateOf(false) }
 
     // Configure osmdroid
     LaunchedEffect(Unit) {
         Configuration.getInstance().userAgentValue = context.packageName
     }
 
-    // Permission launcher
+    // Step 3: Background location (must be requested separately)
+    val bgLocationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        // Start tracking regardless - foreground location is sufficient
+        viewModel.startTracking()
+    }
+
+    // Step 2: Activity recognition + notifications, then background location
+    val extraPermissionsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        // Now request background location separately
+        val bgGranted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!bgGranted) {
+            bgLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        } else {
+            viewModel.startTracking()
+        }
+    }
+
+    // Step 1: Fine + coarse location first
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
-        val bgGranted = permissions[Manifest.permission.ACCESS_BACKGROUND_LOCATION] == true
         if (fineGranted) {
-            viewModel.startTracking()
+            // Now request activity recognition and notifications
+            extraPermissionsLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACTIVITY_RECOGNITION,
+                    Manifest.permission.POST_NOTIFICATIONS
+                )
+            )
+        }
+    }
+
+    fun requestPermissionsAndStart() {
+        val fineGranted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (fineGranted) {
+            val bgGranted = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (bgGranted) {
+                viewModel.startTracking()
+            } else {
+                bgLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+        } else {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
         }
     }
 
@@ -131,15 +187,7 @@ fun TrackingScreen(
                             checked = viewModel.isTracking,
                             onCheckedChange = { checked ->
                                 if (checked) {
-                                    locationPermissionLauncher.launch(
-                                        arrayOf(
-                                            Manifest.permission.ACCESS_FINE_LOCATION,
-                                            Manifest.permission.ACCESS_COARSE_LOCATION,
-                                            Manifest.permission.ACCESS_BACKGROUND_LOCATION,
-                                            Manifest.permission.ACTIVITY_RECOGNITION,
-                                            Manifest.permission.POST_NOTIFICATIONS
-                                        )
-                                    )
+                                    requestPermissionsAndStart()
                                 } else {
                                     viewModel.stopTracking()
                                 }

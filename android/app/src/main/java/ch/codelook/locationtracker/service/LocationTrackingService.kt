@@ -14,7 +14,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import ch.codelook.locationtracker.MainActivity
 import ch.codelook.locationtracker.R
-import ch.codelook.locationtracker.data.api.models.LocationBatch
 import ch.codelook.locationtracker.data.api.models.LocationPoint
 import ch.codelook.locationtracker.data.preferences.PreferencesManager
 import ch.codelook.locationtracker.domain.repository.LocationRepository
@@ -35,6 +34,8 @@ class LocationTrackingService : Service() {
         const val NOTIFICATION_CHANNEL_ID = "location_tracking"
         const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "stop_tracking"
+        const val EXTRA_ACTIVITY_TYPE = "activity_type"
+        const val EXTRA_TRANSITION_TYPE = "transition_type"
 
         private const val MOVING_INTERVAL_MS = 5000L
         private const val MOVING_FASTEST_INTERVAL_MS = 3000L
@@ -44,6 +45,8 @@ class LocationTrackingService : Service() {
         private const val GOOD_FIX_ACCURACY_M = 50f
         private const val MAX_FIX_WAIT_MS = 30000L
         private const val STATIONARY_DELAY_MS = 120000L
+        private const val MIN_BUFFER_INTERVAL_MS = 3000L
+        private const val MIN_BUFFER_DISTANCE_M = 5f
     }
 
     @Inject lateinit var preferencesManager: PreferencesManager
@@ -56,10 +59,10 @@ class LocationTrackingService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var locationCallback: LocationCallback? = null
-    private var activityTransitionRequest: ActivityTransitionRequest? = null
     private var flushTimer: Job? = null
     private var fixTimeoutJob: Job? = null
     private var stationaryDelayJob: Job? = null
+    private var started = false
 
     enum class TrackingMode(val displayName: String) {
         GETTING_FIX("Getting Fix"),
@@ -88,6 +91,8 @@ class LocationTrackingService : Service() {
 
     private val buffer = mutableListOf<LocationPoint>()
     private var lastMotionDetectedTime = 0L
+    private var lastBufferedLocation: Location? = null
+    private var lastBufferedTime = 0L
 
     inner class LocalBinder : Binder() {
         fun getService(): LocationTrackingService = this@LocationTrackingService
@@ -108,11 +113,25 @@ class LocationTrackingService : Service() {
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIFICATION_ID, createNotification("Starting..."))
-        _isTracking.value = true
-        beginGettingFix("Service started")
-        startActivityRecognition()
-        startFlushTimer()
+        // Handle activity transition forwarded from receiver
+        if (intent?.hasExtra(EXTRA_ACTIVITY_TYPE) == true) {
+            val activityType = intent.getIntExtra(EXTRA_ACTIVITY_TYPE, -1)
+            val transitionType = intent.getIntExtra(EXTRA_TRANSITION_TYPE, -1)
+            if (activityType >= 0) {
+                handleActivityTransition(activityType, transitionType)
+            }
+            return START_STICKY
+        }
+
+        // Only start tracking once
+        if (!started) {
+            started = true
+            startForeground(NOTIFICATION_ID, createNotification("Starting..."))
+            _isTracking.value = true
+            beginGettingFix("Service started")
+            startActivityRecognition()
+            startFlushTimer()
+        }
 
         return START_STICKY
     }
@@ -125,6 +144,7 @@ class LocationTrackingService : Service() {
 
     fun stopTracking() {
         _isTracking.value = false
+        started = false
         stopLocationUpdates()
         stopActivityRecognition()
         flushTimer?.cancel()
@@ -211,7 +231,7 @@ class LocationTrackingService : Service() {
 
         startLocationUpdates(request) { location ->
             _currentLocation.value = location
-            addLocationToBuffer(location)
+            maybeBufferLocation(location)
         }
     }
 
@@ -260,7 +280,7 @@ class LocationTrackingService : Service() {
             )
         }
 
-        activityTransitionRequest = ActivityTransitionRequest(transitions)
+        val request = ActivityTransitionRequest(transitions)
 
         val intent = Intent(this, ActivityRecognitionReceiver::class.java)
         val pendingIntent = PendingIntent.getBroadcast(
@@ -269,10 +289,7 @@ class LocationTrackingService : Service() {
         )
 
         try {
-            activityRecognitionClient.requestActivityTransitionUpdates(
-                activityTransitionRequest!!,
-                pendingIntent
-            )
+            activityRecognitionClient.requestActivityTransitionUpdates(request, pendingIntent)
         } catch (e: SecurityException) {
             Log.e(TAG, "Activity recognition permission denied", e)
         }
@@ -330,6 +347,24 @@ class LocationTrackingService : Service() {
     }
 
     // --- Buffer management ---
+
+    private fun maybeBufferLocation(location: Location) {
+        val now = System.currentTimeMillis()
+        val last = lastBufferedLocation
+        val timeSinceLast = now - lastBufferedTime
+
+        // Skip if too soon and too close to last buffered point
+        if (last != null && timeSinceLast < MIN_BUFFER_INTERVAL_MS) {
+            val distance = location.distanceTo(last)
+            if (distance < MIN_BUFFER_DISTANCE_M) {
+                return
+            }
+        }
+
+        lastBufferedLocation = location
+        lastBufferedTime = now
+        addLocationToBuffer(location)
+    }
 
     private fun addLocationToBuffer(location: Location, notes: String? = null) {
         val isoFormatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
