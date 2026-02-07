@@ -49,6 +49,20 @@ def get_session_user() -> tuple[Session, User | None]:
     return db, user
 
 
+def _admin_user_selector(db, current_user):
+    """If admin, show a user picker and return (selected_user_id, selector). Else (user.id, None)."""
+    if not current_user.is_admin:
+        return current_user.id, None
+    all_users = db.query(User).order_by(User.username).all()
+    user_options = {u.id: u.username for u in all_users}
+    selector = ui.select(
+        options=user_options,
+        label="View as user",
+        value=current_user.id,
+    ).classes("w-64 q-mb-md").props('outlined dense')
+    return current_user.id, selector
+
+
 def _nav_link(icon: str, label: str, href: str):
     """Render a navigation link with an icon."""
     with ui.element("a").props(f'href="{href}"').classes(
@@ -198,64 +212,80 @@ async def dashboard_page():
     _header(user)
     _nav_drawer(user)
 
-    device_count = db.query(Device).filter(Device.user_id == user.id).count()
-    location_count = (
-        db.query(Location).join(Device).filter(Device.user_id == user.id).count()
-    )
-    visit_count = (
-        db.query(Visit).join(Device).filter(Device.user_id == user.id).count()
-    )
-    place_count = db.query(Place).filter(Place.user_id == user.id).count()
-
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Dashboard").classes("text-h5 q-mb-md")
-        with ui.row().classes("q-gutter-md"):
-            with ui.card().classes("w-48"):
-                ui.label("Devices").classes("text-subtitle2 text-grey")
-                ui.label(str(device_count)).classes("text-h4")
-            with ui.card().classes("w-48"):
-                ui.label("Location Points").classes("text-subtitle2 text-grey")
-                ui.label(str(location_count)).classes("text-h4")
-            with ui.card().classes("w-48"):
-                ui.label("Visits").classes("text-subtitle2 text-grey")
-                ui.label(str(visit_count)).classes("text-h4")
-            with ui.card().classes("w-48"):
-                ui.label("Known Places").classes("text-subtitle2 text-grey")
-                ui.label(str(place_count)).classes("text-h4")
+        _, user_selector = _admin_user_selector(db, user)
 
-        # Recent locations
-        ui.label("Recent Activity").classes("text-h6 q-mt-lg q-mb-sm")
-        recent = (
-            db.query(Location)
-            .join(Device)
-            .filter(Device.user_id == user.id)
-            .order_by(Location.received_at.desc())
-            .limit(10)
-            .all()
-        )
-        if recent:
-            rows = [
-                {
-                    "device": loc.device.name,
-                    "lat": f"{loc.latitude:.6f}",
-                    "lon": f"{loc.longitude:.6f}",
-                    "time": _fmt(loc.timestamp),
-                    "received": _fmt(loc.received_at),
-                    "notes": loc.notes or "",
-                }
-                for loc in recent
-            ]
-            columns = [
-                {"name": "device", "label": "Device", "field": "device"},
-                {"name": "lat", "label": "Latitude", "field": "lat"},
-                {"name": "lon", "label": "Longitude", "field": "lon"},
-                {"name": "time", "label": "Device Time", "field": "time"},
-                {"name": "received", "label": "Received", "field": "received"},
-                {"name": "notes", "label": "Notes", "field": "notes", "align": "left"},
-            ]
-            ui.table(columns=columns, rows=rows).classes("w-full")
-        else:
-            ui.label("No location data yet. Connect a device to start tracking.").classes("text-grey")
+        content = ui.column().classes("w-full")
+
+        def render_dashboard():
+            content.clear()
+            inner_db = SessionLocal()
+            uid = user_selector.value if user_selector else user.id
+
+            device_count = inner_db.query(Device).filter(Device.user_id == uid).count()
+            location_count = (
+                inner_db.query(Location).join(Device).filter(Device.user_id == uid).count()
+            )
+            visit_count = (
+                inner_db.query(Visit).join(Device).filter(Device.user_id == uid).count()
+            )
+            place_count = inner_db.query(Place).filter(Place.user_id == uid).count()
+
+            with content:
+                with ui.row().classes("q-gutter-md"):
+                    with ui.card().classes("w-48"):
+                        ui.label("Devices").classes("text-subtitle2 text-grey")
+                        ui.label(str(device_count)).classes("text-h4")
+                    with ui.card().classes("w-48"):
+                        ui.label("Location Points").classes("text-subtitle2 text-grey")
+                        ui.label(str(location_count)).classes("text-h4")
+                    with ui.card().classes("w-48"):
+                        ui.label("Visits").classes("text-subtitle2 text-grey")
+                        ui.label(str(visit_count)).classes("text-h4")
+                    with ui.card().classes("w-48"):
+                        ui.label("Known Places").classes("text-subtitle2 text-grey")
+                        ui.label(str(place_count)).classes("text-h4")
+
+                # Recent locations
+                ui.label("Recent Activity").classes("text-h6 q-mt-lg q-mb-sm")
+                recent = (
+                    inner_db.query(Location)
+                    .join(Device)
+                    .filter(Device.user_id == uid)
+                    .order_by(Location.received_at.desc())
+                    .limit(10)
+                    .all()
+                )
+                if recent:
+                    rows = [
+                        {
+                            "device": loc.device.name,
+                            "lat": f"{loc.latitude:.6f}",
+                            "lon": f"{loc.longitude:.6f}",
+                            "time": _fmt(loc.timestamp),
+                            "received": _fmt(loc.received_at),
+                            "notes": loc.notes or "",
+                        }
+                        for loc in recent
+                    ]
+                    columns = [
+                        {"name": "device", "label": "Device", "field": "device"},
+                        {"name": "lat", "label": "Latitude", "field": "lat"},
+                        {"name": "lon", "label": "Longitude", "field": "lon"},
+                        {"name": "time", "label": "Device Time", "field": "time"},
+                        {"name": "received", "label": "Received", "field": "received"},
+                        {"name": "notes", "label": "Notes", "field": "notes", "align": "left"},
+                    ]
+                    ui.table(columns=columns, rows=rows).classes("w-full")
+                else:
+                    ui.label("No location data yet. Connect a device to start tracking.").classes("text-grey")
+
+            inner_db.close()
+
+        if user_selector:
+            user_selector.on_value_change(lambda _: render_dashboard())
+        render_dashboard()
 
         commit_sha = os.environ.get("COMMIT_SHA", "")[:8]
         if commit_sha:
@@ -353,10 +383,13 @@ async def map_page():
     _header(user)
     _nav_drawer(user)
 
-    devices = db.query(Device).filter(Device.user_id == user.id).all()
-
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Location Map").classes("text-h5 q-mb-md")
+        _, user_selector = _admin_user_selector(db, user)
+
+        devices = db.query(Device).filter(
+            Device.user_id == (user_selector.value if user_selector else user.id)
+        ).all()
 
         if not devices:
             ui.label("Register a device first to see locations.").classes("text-grey")
@@ -372,8 +405,24 @@ async def map_page():
 
         map_container = ui.column().classes("w-full")
 
+        def refresh_devices():
+            inner_db = SessionLocal()
+            uid = user_selector.value if user_selector else user.id
+            devs = inner_db.query(Device).filter(Device.user_id == uid).all()
+            inner_db.close()
+            selected_device.options = {d.id: d.name for d in devs}
+            if devs:
+                selected_device.value = devs[0].id
+            else:
+                selected_device.value = None
+                map_container.clear()
+                with map_container:
+                    ui.label("No devices for this user.").classes("text-grey")
+
         def render_map():
             map_container.clear()
+            if not selected_device.value:
+                return
             inner_db = SessionLocal()
             locations = (
                 inner_db.query(Location)
@@ -448,6 +497,8 @@ async def map_page():
 
             inner_db.close()
 
+        if user_selector:
+            user_selector.on_value_change(lambda _: refresh_devices())
         selected_device.on_value_change(lambda _: render_map())
         render_map()
 
@@ -468,13 +519,16 @@ async def visits_page():
     _header(user)
     _nav_drawer(user)
 
-    devices = db.query(Device).filter(Device.user_id == user.id).all()
-
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Visits").classes("text-h5 q-mb-md")
         ui.label(
             "Places where you stayed for at least 5 minutes, detected automatically from GPS data."
         ).classes("text-caption text-grey q-mb-md")
+        _, user_selector = _admin_user_selector(db, user)
+
+        devices = db.query(Device).filter(
+            Device.user_id == (user_selector.value if user_selector else user.id)
+        ).all()
 
         if not devices:
             ui.label("Register a device first.").classes("text-grey")
@@ -490,8 +544,24 @@ async def visits_page():
 
         content = ui.column().classes("w-full")
 
+        def refresh_devices():
+            inner_db = SessionLocal()
+            uid = user_selector.value if user_selector else user.id
+            devs = inner_db.query(Device).filter(Device.user_id == uid).all()
+            inner_db.close()
+            selected_device.options = {d.id: d.name for d in devs}
+            if devs:
+                selected_device.value = devs[0].id
+            else:
+                selected_device.value = None
+                content.clear()
+                with content:
+                    ui.label("No devices for this user.").classes("text-grey")
+
         def render_visits():
             content.clear()
+            if not selected_device.value:
+                return
             inner_db = SessionLocal()
             visits = (
                 inner_db.query(Visit)
@@ -536,6 +606,8 @@ async def visits_page():
 
             inner_db.close()
 
+        if user_selector:
+            user_selector.on_value_change(lambda _: refresh_devices())
         selected_device.on_value_change(lambda _: render_visits())
         render_visits()
 
@@ -561,69 +633,84 @@ async def places_page():
         ui.label(
             "Locations you visit repeatedly, ranked by number of visits."
         ).classes("text-caption text-grey q-mb-md")
+        _, user_selector = _admin_user_selector(db, user)
 
-        places = (
-            db.query(Place)
-            .filter(Place.user_id == user.id)
-            .order_by(Place.visit_count.desc())
-            .all()
-        )
+        content = ui.column().classes("w-full")
 
-        if not places:
-            ui.label("No places detected yet. Visit detection runs automatically when locations are uploaded.").classes(
-                "text-grey"
-            )
-            db.close()
-            return
-
-        # Map with all known places
-        m = ui.leaflet(center=(places[0].latitude, places[0].longitude), zoom=12).classes("w-full").style(
-            "height: 400px"
-        )
-        for p in places:
-            m.marker(latlng=(p.latitude, p.longitude))
-
-        # Table
-        rows = [
-            {
-                "name": p.name or "-",
-                "address": p.address or f"{p.latitude:.5f}, {p.longitude:.5f}",
-                "visits": p.visit_count,
-                "total_time": _format_duration(p.total_duration_seconds),
-                "avg_time": _format_duration(p.total_duration_seconds // p.visit_count) if p.visit_count else "-",
-                "pid": p.id,
-            }
-            for p in places
-        ]
-        columns = [
-            {"name": "name", "label": "Name", "field": "name", "align": "left"},
-            {"name": "address", "label": "Address", "field": "address", "align": "left"},
-            {"name": "visits", "label": "Visits", "field": "visits"},
-            {"name": "total_time", "label": "Total Time", "field": "total_time"},
-            {"name": "avg_time", "label": "Avg Duration", "field": "avg_time"},
-        ]
-        ui.table(columns=columns, rows=rows).classes("w-full q-mt-md")
-
-        # Inline rename
-        ui.label("Rename a place").classes("text-h6 q-mt-lg q-mb-sm")
-        place_options = {p.id: (p.name or p.address or f"Place #{p.id}") for p in places}
-        sel_place = ui.select(options=place_options, label="Select Place").classes("w-64")
-        new_name = ui.input("New Name").classes("w-64")
-
-        def rename_place():
-            if not sel_place.value or not new_name.value:
-                ui.notify("Select a place and enter a name", type="warning")
-                return
+        def render_places():
+            content.clear()
             inner_db = SessionLocal()
-            place = inner_db.query(Place).filter(Place.id == sel_place.value).first()
-            if place:
-                place.name = new_name.value
-                inner_db.commit()
-                ui.notify(f"Renamed to '{new_name.value}'", type="positive")
-            inner_db.close()
-            ui.navigate.to("/places")
+            uid = user_selector.value if user_selector else user.id
 
-        ui.button("Rename", on_click=rename_place).classes("q-mt-sm")
+            places = (
+                inner_db.query(Place)
+                .filter(Place.user_id == uid)
+                .order_by(Place.visit_count.desc())
+                .all()
+            )
+
+            with content:
+                if not places:
+                    ui.label("No places detected yet. Visit detection runs automatically when locations are uploaded.").classes(
+                        "text-grey"
+                    )
+                    inner_db.close()
+                    return
+
+                # Map with all known places
+                m = ui.leaflet(center=(places[0].latitude, places[0].longitude), zoom=12).classes("w-full").style(
+                    "height: 400px"
+                )
+                for p in places:
+                    m.marker(latlng=(p.latitude, p.longitude))
+
+                # Table
+                rows = [
+                    {
+                        "name": p.name or "-",
+                        "address": p.address or f"{p.latitude:.5f}, {p.longitude:.5f}",
+                        "visits": p.visit_count,
+                        "total_time": _format_duration(p.total_duration_seconds),
+                        "avg_time": _format_duration(p.total_duration_seconds // p.visit_count) if p.visit_count else "-",
+                        "pid": p.id,
+                    }
+                    for p in places
+                ]
+                columns = [
+                    {"name": "name", "label": "Name", "field": "name", "align": "left"},
+                    {"name": "address", "label": "Address", "field": "address", "align": "left"},
+                    {"name": "visits", "label": "Visits", "field": "visits"},
+                    {"name": "total_time", "label": "Total Time", "field": "total_time"},
+                    {"name": "avg_time", "label": "Avg Duration", "field": "avg_time"},
+                ]
+                ui.table(columns=columns, rows=rows).classes("w-full q-mt-md")
+
+                # Inline rename
+                ui.label("Rename a place").classes("text-h6 q-mt-lg q-mb-sm")
+                place_options = {p.id: (p.name or p.address or f"Place #{p.id}") for p in places}
+                sel_place = ui.select(options=place_options, label="Select Place").classes("w-64")
+                new_name = ui.input("New Name").classes("w-64")
+
+                def rename_place():
+                    if not sel_place.value or not new_name.value:
+                        ui.notify("Select a place and enter a name", type="warning")
+                        return
+                    rdb = SessionLocal()
+                    place = rdb.query(Place).filter(Place.id == sel_place.value).first()
+                    if place:
+                        place.name = new_name.value
+                        rdb.commit()
+                        ui.notify(f"Renamed to '{new_name.value}'", type="positive")
+                    rdb.close()
+                    render_places()
+
+                ui.button("Rename", on_click=rename_place).classes("q-mt-sm")
+
+            inner_db.close()
+
+        if user_selector:
+            user_selector.on_value_change(lambda _: render_places())
+        render_places()
 
     db.close()
 
