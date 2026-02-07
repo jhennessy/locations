@@ -352,8 +352,8 @@
 				DEVELOPMENT_TEAM = 7XYRZFRL6S;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = LocationTracker/Info.plist;
-				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "LocationTracker needs your location to record your position history.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "LocationTracker needs your location to show your current position.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Locationz needs your location to record your position history.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Locationz needs your location to show your current position.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -381,8 +381,8 @@
 				DEVELOPMENT_TEAM = 7XYRZFRL6S;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = LocationTracker/Info.plist;
-				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "LocationTracker needs your location to record your position history.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "LocationTracker needs your location to show your current position.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Locationz needs your location to record your position history.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Locationz needs your location to show your current position.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
