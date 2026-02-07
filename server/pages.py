@@ -387,20 +387,13 @@ async def map_page():
         ui.label("Location Map").classes("text-h5 q-mb-md")
         _, user_selector = _admin_user_selector(db, user)
 
-        devices = db.query(Device).filter(
-            Device.user_id == (user_selector.value if user_selector else user.id)
-        ).all()
-
-        if not devices:
-            ui.label("Register a device first to see locations.").classes("text-grey")
-            db.close()
-            return
-
+        uid = user_selector.value if user_selector else user.id
+        devices = db.query(Device).filter(Device.user_id == uid).all()
         device_options = {d.id: d.name for d in devices}
         selected_device = ui.select(
             options=device_options,
             label="Select Device",
-            value=devices[0].id,
+            value=devices[0].id if devices else None,
         ).classes("w-64 q-mb-md")
 
         map_container = ui.column().classes("w-full")
@@ -411,17 +404,14 @@ async def map_page():
             devs = inner_db.query(Device).filter(Device.user_id == uid).all()
             inner_db.close()
             selected_device.options = {d.id: d.name for d in devs}
-            if devs:
-                selected_device.value = devs[0].id
-            else:
-                selected_device.value = None
-                map_container.clear()
-                with map_container:
-                    ui.label("No devices for this user.").classes("text-grey")
+            selected_device.value = devs[0].id if devs else None
+            render_map()
 
         def render_map():
             map_container.clear()
             if not selected_device.value:
+                with map_container:
+                    ui.label("No location data available.").classes("text-grey")
                 return
             inner_db = SessionLocal()
             locations = (
@@ -526,20 +516,13 @@ async def visits_page():
         ).classes("text-caption text-grey q-mb-md")
         _, user_selector = _admin_user_selector(db, user)
 
-        devices = db.query(Device).filter(
-            Device.user_id == (user_selector.value if user_selector else user.id)
-        ).all()
-
-        if not devices:
-            ui.label("Register a device first.").classes("text-grey")
-            db.close()
-            return
-
+        uid = user_selector.value if user_selector else user.id
+        devices = db.query(Device).filter(Device.user_id == uid).all()
         device_options = {d.id: d.name for d in devices}
         selected_device = ui.select(
             options=device_options,
             label="Select Device",
-            value=devices[0].id,
+            value=devices[0].id if devices else None,
         ).classes("w-64 q-mb-md")
 
         content = ui.column().classes("w-full")
@@ -550,17 +533,14 @@ async def visits_page():
             devs = inner_db.query(Device).filter(Device.user_id == uid).all()
             inner_db.close()
             selected_device.options = {d.id: d.name for d in devs}
-            if devs:
-                selected_device.value = devs[0].id
-            else:
-                selected_device.value = None
-                content.clear()
-                with content:
-                    ui.label("No devices for this user.").classes("text-grey")
+            selected_device.value = devs[0].id if devs else None
+            render_visits()
 
         def render_visits():
             content.clear()
             if not selected_device.value:
+                with content:
+                    ui.label("No visit data available.").classes("text-grey")
                 return
             inner_db = SessionLocal()
             visits = (
