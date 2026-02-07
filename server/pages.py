@@ -798,7 +798,7 @@ def _render_users_tab(current_user):
             # Reset password section
             ui.separator().classes("q-my-md")
             ui.label("Reset User Password").classes("text-h6 q-mb-sm")
-            user_options = {u.id: u.username for u in all_users if u.id != current_user.id}
+            user_options = {u.id: u.username for u in all_users}
             if user_options:
                 sel_user = ui.select(options=user_options, label="Select User").classes("w-64")
                 reset_pw = ui.input("New Password", password=True, password_toggle_button=True).classes("w-64")
