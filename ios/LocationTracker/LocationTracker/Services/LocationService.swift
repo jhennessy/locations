@@ -18,6 +18,12 @@ enum TrackingMode: String {
 /// When motion is detected, switches to full GPS tracking.
 /// Before entering stationary mode, acquires a good GPS fix first.
 /// State transitions are recorded as location points with descriptive notes.
+///
+/// Background wake strategy:
+/// - SLC wakes the app for ~10 seconds. During this window we buffer the
+///   location and flush to the server, but do NOT switch to continuous GPS
+///   (iOS won't grant enough execution time). We stay on SLC.
+/// - Continuous GPS only runs when the app is in the foreground.
 class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = LocationService()
 
@@ -71,6 +77,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var pendingStationaryReason: String?
     private var isMotionAvailable: Bool { CMMotionActivityManager.isActivityAvailable() }
 
+    /// Whether the app is currently in the background. Updated by lifecycle handlers.
+    private var isInBackground = false
+
     // MARK: - Buffer persistence
 
     private static let bufferFileURL: URL = {
@@ -96,7 +105,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             let data = try Data(contentsOf: Self.bufferFileURL)
             let points = try JSONDecoder().decode([LocationPoint].self, from: data)
             buffer.insert(contentsOf: points, at: 0)
-            Log.buffer.info("Restored \(points.count) points from disk")
+            Log.buffer.notice("Restored \(points.count) points from disk")
             try? FileManager.default.removeItem(at: Self.bufferFileURL)
         } catch {
             Log.buffer.error("Failed to load buffer: \(error.localizedDescription)")
@@ -127,7 +136,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         // Auto-resume tracking if it was active before
         if UserDefaults.standard.bool(forKey: "tracking_enabled"), deviceId != nil {
-            Log.location.info("Auto-resuming tracking from previous session")
+            Log.location.notice("Auto-resuming tracking from previous session")
             startTracking()
         }
     }
@@ -149,7 +158,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         UserDefaults.standard.set(true, forKey: "tracking_enabled")
         lastFlushTime = Date()
 
-        Log.location.info("Starting tracking (buffer: \(self.buffer.count) points)")
+        Log.location.notice("Starting tracking (buffer: \(self.buffer.count) points, background: \(self.isInBackground))")
 
         // Get a good fix first, then go to stationary mode
         beginGettingFix(reason: "Tracking started")
@@ -157,7 +166,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func stopTracking() {
-        Log.location.info("Stopping tracking (buffer: \(self.buffer.count) points)")
+        Log.location.notice("Stopping tracking (buffer: \(self.buffer.count) points)")
 
         isTracking = false
         UserDefaults.standard.set(false, forKey: "tracking_enabled")
@@ -178,7 +187,16 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - Lifecycle
 
     func handleBackgroundTransition() {
-        Log.lifecycle.info("Background transition — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking)")
+        isInBackground = true
+        Log.lifecycle.notice("Background — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking)")
+
+        // If we're in moving mode when backgrounding, switch to stationary/SLC
+        // so iOS doesn't suspend us without a wake mechanism.
+        if isTracking && trackingMode == .moving {
+            Log.location.notice("Backgrounding while moving → getting fix then SLC")
+            beginGettingFix(reason: "App backgrounded while moving")
+        }
+
         saveBuffer()
         if !buffer.isEmpty {
             Task { await flushBuffer() }
@@ -186,7 +204,15 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func handleForegroundTransition() {
-        Log.lifecycle.info("Foreground transition — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking)")
+        isInBackground = false
+        Log.lifecycle.notice("Foreground — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking)")
+
+        // If we're stationary but motion was detected while backgrounded,
+        // now we can safely switch to continuous GPS.
+        if isTracking && trackingMode == .stationary {
+            Log.location.notice("Foregrounded while stationary → getting fix")
+            beginGettingFix(reason: "App foregrounded")
+        }
     }
 
     // MARK: - Motion detection
@@ -205,7 +231,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
                 self.handleMotionActivity(activity)
             }
         }
-        Log.motion.info("Started motion updates")
+        Log.motion.notice("Started motion updates")
     }
 
     private func handleMotionActivity(_ activity: CMMotionActivity) {
@@ -220,6 +246,13 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             lastMovingActivityTime = nil
 
             if trackingMode != .moving {
+                // Don't switch to continuous GPS when backgrounded —
+                // iOS only gives ~10s of execution after an SLC wake,
+                // not enough for sustained GPS tracking.
+                if isInBackground {
+                    Log.motion.notice("Motion detected while backgrounded (\(activityName)) — staying on SLC")
+                    return
+                }
                 // Cancel any pending fix acquisition too
                 cancelPendingFix()
                 switchToMoving(reason: "Motion detected: \(activityName)")
@@ -267,7 +300,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.stopMonitoringSignificantLocationChanges()
         locationManager.startUpdatingLocation()
 
-        Log.location.info("→ Getting fix: \(reason)")
+        Log.location.notice("→ Getting fix: \(reason)")
         recordStateChange("→ Getting fix: \(reason)")
     }
 
@@ -286,7 +319,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         // SLC wakes us from suspension AND can relaunch after termination.
         locationManager.startMonitoringSignificantLocationChanges()
 
-        Log.location.info("→ Stationary (\(accuracy)): \(reason). SLC monitoring active.")
+        Log.location.notice("→ Stationary (\(accuracy)): \(reason). SLC monitoring active.")
         recordStateChange("→ Stationary (\(accuracy)): \(reason)")
 
         saveBuffer()
@@ -309,7 +342,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.startUpdatingLocation()
 
         if previousMode != .moving {
-            Log.location.info("→ Moving (was \(previousMode.rawValue)): \(reason)")
+            Log.location.notice("→ Moving (was \(previousMode.rawValue)): \(reason)")
             recordStateChange("→ Moving: \(reason)")
         }
     }
@@ -340,7 +373,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
             // If we're waiting for a good fix, check if this one qualifies
             if trackingMode == .gettingFix && location.horizontalAccuracy <= goodFixAccuracy {
-                Log.location.info("Good fix acquired: \(location.horizontalAccuracy, format: .fixed(precision: 0))m")
+                Log.location.notice("Good fix acquired: \(location.horizontalAccuracy, format: .fixed(precision: 0))m")
                 completeStationaryTransition(
                     accuracy: String(format: "%.0fm accuracy", location.horizontalAccuracy)
                 )
@@ -357,14 +390,14 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         // Check stationary transition (replaces stationaryTimer)
         if trackingMode == .moving, let motionTime = lastMovingActivityTime,
            Date().timeIntervalSince(motionTime) >= stationaryDelay {
-            Log.location.info("Stationary countdown elapsed (\(Int(self.stationaryDelay))s)")
+            Log.location.notice("Stationary countdown elapsed (\(Int(self.stationaryDelay))s)")
             lastMovingActivityTime = nil
             beginGettingFix(reason: "Stationary for \(Int(stationaryDelay))s")
         }
 
-        // Log SLC wake while stationary
+        // SLC wake while stationary — buffer and flush, stay on SLC
         if trackingMode == .stationary {
-            Log.location.info("SLC wake: received \(locations.count) location(s) while stationary")
+            Log.location.notice("SLC wake: received \(locations.count) location(s) while stationary (bg: \(self.isInBackground))")
             saveBuffer()
         }
 
@@ -379,7 +412,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let newStatus = manager.authorizationStatus
         authorizationStatus = newStatus
-        Log.location.info("Authorization changed: \(String(describing: newStatus))")
+        Log.location.notice("Authorization changed: \(String(describing: newStatus))")
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -391,12 +424,12 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         recordStateChange("iOS paused location updates")
         if isTracking && trackingMode != .stationary {
             manager.startUpdatingLocation()
-            Log.location.info("Resumed location updates after iOS pause")
+            Log.location.notice("Resumed location updates after iOS pause")
         }
     }
 
     func locationManagerDidResumeLocationUpdates(_ manager: CLLocationManager) {
-        Log.location.info("iOS resumed location updates")
+        Log.location.notice("iOS resumed location updates")
     }
 
     // MARK: - Buffer flush
@@ -408,13 +441,13 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         let pointsToUpload = buffer
         buffer.removeAll()
 
-        Log.network.info("Uploading \(pointsToUpload.count) points...")
+        Log.network.notice("Uploading \(pointsToUpload.count) points...")
 
         do {
             let response = try await api.uploadLocations(deviceId: deviceId, locations: pointsToUpload)
             uploadError = nil
             deleteBufferFile()
-            Log.network.info("Uploaded \(response.received) points (batch: \(response.batchId), visits: \(response.visitsDetected))")
+            Log.network.notice("Uploaded \(response.received) points (batch: \(response.batchId), visits: \(response.visitsDetected))")
         } catch {
             // Put points back in buffer for retry
             buffer.insert(contentsOf: pointsToUpload, at: 0)
