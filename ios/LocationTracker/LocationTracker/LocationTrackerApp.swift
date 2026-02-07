@@ -5,6 +5,10 @@ struct LocationTrackerApp: App {
     @StateObject private var api = APIService.shared
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Eagerly initialize LocationService so it starts tracking even when
+    /// the app is relaunched in the background by SLC after jetsam.
+    private let locationService = LocationService.shared
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -12,12 +16,12 @@ struct LocationTrackerApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {
                     case .active:
-                        Log.lifecycle.info("App became active")
+                        Log.lifecycle.notice("App became active")
                         LocationService.shared.handleForegroundTransition()
                     case .inactive:
-                        Log.lifecycle.info("App became inactive")
+                        Log.lifecycle.notice("App became inactive")
                     case .background:
-                        Log.lifecycle.info("App entering background")
+                        Log.lifecycle.notice("App entering background")
                         LocationService.shared.handleBackgroundTransition()
                     @unknown default:
                         Log.lifecycle.warning("Unknown scene phase")
