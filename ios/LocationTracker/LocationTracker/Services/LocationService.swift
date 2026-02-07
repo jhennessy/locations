@@ -20,9 +20,10 @@ enum TrackingMode: String {
 /// State transitions are recorded as location points with descriptive notes.
 ///
 /// Background wake strategy:
-/// - SLC wakes the app for ~10 seconds. During this window we buffer the
-///   location and flush to the server, but do NOT switch to continuous GPS
-///   (iOS won't grant enough execution time). We stay on SLC.
+/// - SLC wakes the app for ~10 seconds on ~500m cell tower changes.
+/// - Region monitoring (100m geofence) wakes the app on shorter movements.
+///   On exit, we get a new fix, buffer it, set a new fence, and go back to sleep.
+/// - Both survive app termination and can relaunch after jetsam.
 /// - Continuous GPS only runs when the app is in the foreground.
 class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = LocationService()
@@ -68,6 +69,12 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// Maximum time (seconds) to wait for a good fix before giving up and going stationary anyway.
     private let maxFixWait: TimeInterval = 30.0
+
+    /// Radius (metres) for the geofence region monitor. On exit, we wake and get a new fix.
+    private let geofenceRadius: Double = 100.0
+
+    /// Identifier for the single monitored geofence region.
+    private let geofenceIdentifier = "com.locationtracker.geofence"
 
     // Timer-free state tracking
     private var lastFlushTime: Date = Date()
@@ -176,6 +183,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         locationManager.stopUpdatingLocation()
         locationManager.stopMonitoringSignificantLocationChanges()
+        removeGeofence()
         motionManager.stopActivityUpdates()
 
         recordStateChange("Tracking stopped")
@@ -298,6 +306,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = kCLDistanceFilterNone
         locationManager.stopMonitoringSignificantLocationChanges()
+        removeGeofence()
         locationManager.startUpdatingLocation()
 
         Log.location.notice("→ Getting fix: \(reason)")
@@ -319,7 +328,10 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         // SLC wakes us from suspension AND can relaunch after termination.
         locationManager.startMonitoringSignificantLocationChanges()
 
-        Log.location.notice("→ Stationary (\(accuracy)): \(reason). SLC monitoring active.")
+        // Region monitor (100m geofence) gives finer-grained wakes than SLC (~500m).
+        setupGeofence()
+
+        Log.location.notice("→ Stationary (\(accuracy)): \(reason). SLC + geofence active.")
         recordStateChange("→ Stationary (\(accuracy)): \(reason)")
 
         saveBuffer()
@@ -328,6 +340,40 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func cancelPendingFix() {
         fixStartTime = nil
         pendingStationaryReason = nil
+    }
+
+    // MARK: - Region monitoring (geofence)
+
+    /// Set up a 100m geofence around the current position. Replaces any existing fence.
+    private func setupGeofence() {
+        guard let location = lastLocation ?? locationManager.location else {
+            Log.location.warning("Cannot set up geofence: no location available")
+            return
+        }
+
+        // Remove old fence first (only one at a time)
+        removeGeofence()
+
+        let region = CLCircularRegion(
+            center: location.coordinate,
+            radius: geofenceRadius,
+            identifier: geofenceIdentifier
+        )
+        region.notifyOnExit = true
+        region.notifyOnEntry = false
+
+        locationManager.startMonitoring(for: region)
+        Log.location.notice("Geofence set: \(location.coordinate.latitude, format: .fixed(precision: 5)), \(location.coordinate.longitude, format: .fixed(precision: 5)) r=\(Int(self.geofenceRadius))m")
+    }
+
+    /// Remove any active geofence region.
+    private func removeGeofence() {
+        for region in locationManager.monitoredRegions {
+            if region.identifier == geofenceIdentifier {
+                locationManager.stopMonitoring(for: region)
+                Log.location.debug("Geofence removed")
+            }
+        }
     }
 
     private func switchToMoving(reason: String) {
@@ -339,6 +385,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = 10
         locationManager.stopMonitoringSignificantLocationChanges()
+        removeGeofence()
         locationManager.startUpdatingLocation()
 
         if previousMode != .moving {
@@ -430,6 +477,26 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func locationManagerDidResumeLocationUpdates(_ manager: CLLocationManager) {
         Log.location.notice("iOS resumed location updates")
+    }
+
+    func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
+        guard region.identifier == geofenceIdentifier, isTracking else { return }
+
+        Log.location.notice("Geofence exit detected (bg: \(self.isInBackground), mode: \(self.trackingMode.rawValue))")
+        recordStateChange("Geofence exit")
+
+        if isInBackground {
+            // We're woken for ~10 seconds. Get a quick fix, buffer it, re-fence, flush.
+            beginGettingFix(reason: "Geofence exit (background)")
+        } else {
+            // Foreground — switch to full GPS tracking
+            cancelPendingFix()
+            switchToMoving(reason: "Geofence exit (foreground)")
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
+        Log.location.error("Region monitoring failed for \(region?.identifier ?? "nil"): \(error.localizedDescription)")
     }
 
     // MARK: - Buffer flush
