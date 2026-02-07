@@ -373,8 +373,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         region.notifyOnEntry = false
 
         locationManager.startMonitoring(for: region)
-        Log.location.notice("Geofence set: \(location.coordinate.latitude, format: .fixed(precision: 5)), \(location.coordinate.longitude, format: .fixed(precision: 5)) r=\(Int(self.geofenceRadius))m")
-        recordStateChange("Geofence set r=\(Int(geofenceRadius))m")
+        let acc = String(format: "%.0f", location.horizontalAccuracy)
+        Log.location.notice("Geofence set: \(location.coordinate.latitude, format: .fixed(precision: 5)), \(location.coordinate.longitude, format: .fixed(precision: 5)) r=\(Int(self.geofenceRadius))m acc=\(acc)m")
+        recordStateChange("Geofence set r=\(Int(geofenceRadius))m acc=\(acc)m")
     }
 
     /// Remove any active geofence region.
