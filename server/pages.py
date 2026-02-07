@@ -63,6 +63,13 @@ def _admin_user_selector(db, current_user):
     return current_user.id, selector
 
 
+def _selected_uid(user_selector, fallback_user) -> int:
+    """Get the effective user ID from the admin selector, always as int."""
+    if user_selector and user_selector.value is not None:
+        return int(user_selector.value)
+    return fallback_user.id
+
+
 def _nav_link(icon: str, label: str, href: str):
     """Render a navigation link with an icon."""
     with ui.element("a").props(f'href="{href}"').classes(
@@ -221,7 +228,7 @@ async def dashboard_page():
         def render_dashboard():
             content.clear()
             inner_db = SessionLocal()
-            uid = user_selector.value if user_selector else user.id
+            uid = _selected_uid(user_selector, user)
 
             device_count = inner_db.query(Device).filter(Device.user_id == uid).count()
             location_count = (
@@ -310,6 +317,7 @@ async def devices_page():
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Device Management").classes("text-h5 q-mb-md")
+        _, user_selector = _admin_user_selector(db, user)
 
         with ui.card().classes("q-mb-lg w-96"):
             ui.label("Register New Device").classes("text-h6 q-mb-sm")
@@ -326,45 +334,63 @@ async def devices_page():
                     ui.notify("Device identifier already registered", type="negative")
                     inner_db.close()
                     return
-                device = Device(name=device_name.value, identifier=device_id.value, user_id=user.id)
+                target_uid = _selected_uid(user_selector, user)
+                device = Device(name=device_name.value, identifier=device_id.value, user_id=target_uid)
                 inner_db.add(device)
                 inner_db.commit()
                 inner_db.close()
-                ui.navigate.to("/devices")
+                render_devices()
 
             ui.button("Add Device", on_click=add_device).classes("q-mt-sm")
 
-        ui.label("Your Devices").classes("text-h6 q-mb-sm")
-        devices = db.query(Device).filter(Device.user_id == user.id).all()
-        if devices:
-            for d in devices:
-                loc_count = db.query(Location).filter(Location.device_id == d.id).count()
-                visit_count = db.query(Visit).filter(Visit.device_id == d.id).count()
-                with ui.card().classes("w-full q-mb-sm"):
-                    with ui.row().classes("items-center justify-between w-full"):
-                        with ui.column():
-                            ui.label(d.name).classes("text-subtitle1 text-bold")
-                            ui.label(f"ID: {d.identifier}").classes("text-caption text-grey")
-                            ui.label(f"{loc_count} points | {visit_count} visits").classes("text-caption")
-                            if d.last_seen:
-                                ui.label(f"Last seen: {_fmt(d.last_seen, '%Y-%m-%d %H:%M')}").classes(
-                                    "text-caption text-grey"
-                                )
+        devices_container = ui.column().classes("w-full")
 
-                        def make_delete(did):
-                            def delete():
-                                inner_db = SessionLocal()
-                                dev = inner_db.query(Device).filter(Device.id == did).first()
-                                if dev:
-                                    inner_db.delete(dev)
-                                    inner_db.commit()
-                                inner_db.close()
-                                ui.navigate.to("/devices")
-                            return delete
+        def render_devices():
+            devices_container.clear()
+            inner_db = SessionLocal()
+            uid = _selected_uid(user_selector, user)
+            devices = inner_db.query(Device).filter(Device.user_id == uid).all()
 
-                        ui.button("Delete", on_click=make_delete(d.id)).props("flat color=red")
-        else:
-            ui.label("No devices registered yet.").classes("text-grey")
+            with devices_container:
+                target_user = inner_db.query(User).filter(User.id == uid).first()
+                label = f"Devices for {target_user.username}" if target_user and target_user.id != user.id else "Your Devices"
+                ui.label(label).classes("text-h6 q-mb-sm")
+
+                if devices:
+                    for d in devices:
+                        loc_count = inner_db.query(Location).filter(Location.device_id == d.id).count()
+                        visit_count = inner_db.query(Visit).filter(Visit.device_id == d.id).count()
+                        with ui.card().classes("w-full q-mb-sm"):
+                            with ui.row().classes("items-center justify-between w-full"):
+                                with ui.column():
+                                    ui.label(d.name).classes("text-subtitle1 text-bold")
+                                    ui.label(f"ID: {d.identifier}").classes("text-caption text-grey")
+                                    ui.label(f"{loc_count} points | {visit_count} visits").classes("text-caption")
+                                    if d.last_seen:
+                                        ui.label(f"Last seen: {_fmt(d.last_seen, '%Y-%m-%d %H:%M')}").classes(
+                                            "text-caption text-grey"
+                                        )
+
+                                def make_delete(did):
+                                    def delete():
+                                        ddb = SessionLocal()
+                                        dev = ddb.query(Device).filter(Device.id == did).first()
+                                        if dev:
+                                            ddb.delete(dev)
+                                            ddb.commit()
+                                        ddb.close()
+                                        render_devices()
+                                    return delete
+
+                                ui.button("Delete", on_click=make_delete(d.id)).props("flat color=red")
+                else:
+                    ui.label("No devices registered.").classes("text-grey")
+
+            inner_db.close()
+
+        if user_selector:
+            user_selector.on_value_change(lambda _: render_devices())
+        render_devices()
 
     db.close()
 
@@ -387,7 +413,7 @@ async def map_page():
         ui.label("Location Map").classes("text-h5 q-mb-md")
         _, user_selector = _admin_user_selector(db, user)
 
-        uid = user_selector.value if user_selector else user.id
+        uid = _selected_uid(user_selector, user)
         devices = db.query(Device).filter(Device.user_id == uid).all()
         device_options = {d.id: d.name for d in devices}
         selected_device = ui.select(
@@ -400,7 +426,7 @@ async def map_page():
 
         def refresh_devices():
             inner_db = SessionLocal()
-            uid = user_selector.value if user_selector else user.id
+            uid = _selected_uid(user_selector, user)
             devs = inner_db.query(Device).filter(Device.user_id == uid).all()
             inner_db.close()
             selected_device.options = {d.id: d.name for d in devs}
@@ -516,7 +542,7 @@ async def visits_page():
         ).classes("text-caption text-grey q-mb-md")
         _, user_selector = _admin_user_selector(db, user)
 
-        uid = user_selector.value if user_selector else user.id
+        uid = _selected_uid(user_selector, user)
         devices = db.query(Device).filter(Device.user_id == uid).all()
         device_options = {d.id: d.name for d in devices}
         selected_device = ui.select(
@@ -529,7 +555,7 @@ async def visits_page():
 
         def refresh_devices():
             inner_db = SessionLocal()
-            uid = user_selector.value if user_selector else user.id
+            uid = _selected_uid(user_selector, user)
             devs = inner_db.query(Device).filter(Device.user_id == uid).all()
             inner_db.close()
             selected_device.options = {d.id: d.name for d in devs}
@@ -620,7 +646,7 @@ async def places_page():
         def render_places():
             content.clear()
             inner_db = SessionLocal()
-            uid = user_selector.value if user_selector else user.id
+            uid = _selected_uid(user_selector, user)
 
             places = (
                 inner_db.query(Place)
