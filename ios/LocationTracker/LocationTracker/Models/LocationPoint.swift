@@ -60,9 +60,11 @@ struct LocationBatch: Codable {
 struct BatchResponse: Codable {
     let received: Int
     let batchId: String
+    let visitsDetected: Int
 
     enum CodingKeys: String, CodingKey {
         case received
         case batchId = "batch_id"
+        case visitsDetected = "visits_detected"
     }
 }

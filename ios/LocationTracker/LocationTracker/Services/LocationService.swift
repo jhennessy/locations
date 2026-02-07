@@ -414,7 +414,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             let response = try await api.uploadLocations(deviceId: deviceId, locations: pointsToUpload)
             uploadError = nil
             deleteBufferFile()
-            Log.network.info("Uploaded \(response.received) points (batch: \(response.batchId))")
+            Log.network.info("Uploaded \(response.received) points (batch: \(response.batchId), visits: \(response.visitsDetected))")
         } catch {
             // Put points back in buffer for retry
             buffer.insert(contentsOf: pointsToUpload, at: 0)
