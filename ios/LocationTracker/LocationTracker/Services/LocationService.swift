@@ -85,7 +85,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let geofenceRadius: Double = 100.0
 
     /// Identifier for the single monitored geofence region.
-    private let geofenceIdentifier = "com.locationtracker.geofence"
+    private let geofenceIdentifier = "ch.codelook.locationz.geofence"
 
     // Timer-free state tracking
     private var lastFlushTime: Date = Date()
@@ -154,7 +154,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.activityType = .other
         authorizationStatus = locationManager.authorizationStatus
 
-        motionQueue.name = "com.locationtracker.motion"
+        motionQueue.name = "ch.codelook.locationz.motion"
         motionQueue.maxConcurrentOperationCount = 1
 
         // Restore any buffered points from a previous session

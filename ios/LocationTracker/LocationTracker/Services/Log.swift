@@ -5,13 +5,13 @@ import os
 /// Usage: `Log.location.info("Got fix: \(accuracy)m")`
 ///
 /// View on Mac with device connected:
-///   log stream --predicate 'subsystem == "com.locationtracker.app"' --level debug
+///   log stream --predicate 'subsystem == "ch.codelook.locationz"' --level debug
 ///
 /// Export for analysis:
 ///   sudo log collect --device --last 1h --output ~/Desktop/location-logs.logarchive
-///   log show ~/Desktop/location-logs.logarchive --predicate 'subsystem == "com.locationtracker.app"' --level debug
+///   log show ~/Desktop/location-logs.logarchive --predicate 'subsystem == "ch.codelook.locationz"' --level debug
 enum Log {
-    private static let subsystem = "com.locationtracker.app"
+    private static let subsystem = "ch.codelook.locationz"
 
     /// Location tracking, mode changes, CLLocationManager events
     static let location = Logger(subsystem: subsystem, category: "location")
