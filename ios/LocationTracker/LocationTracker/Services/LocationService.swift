@@ -85,7 +85,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var isMotionAvailable: Bool { CMMotionActivityManager.isActivityAvailable() }
 
     /// Whether the app is currently in the background. Updated by lifecycle handlers.
-    private var isInBackground = false
+    /// Defaults to `true` so that background relaunches (SLC/geofence) are safe —
+    /// the foreground handler sets it to `false` when the UI appears.
+    private var isInBackground = true
 
     // MARK: - Buffer persistence
 
@@ -141,9 +143,10 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         // Restore any buffered points from a previous session
         loadBuffer()
 
-        // Auto-resume tracking if it was active before
+        // Auto-resume tracking if it was active before (works for both GUI launch and
+        // background relaunch by SLC/geofence after jetsam).
         if UserDefaults.standard.bool(forKey: "tracking_enabled"), deviceId != nil {
-            Log.location.notice("Auto-resuming tracking from previous session")
+            Log.location.notice("Auto-resuming tracking from previous session (bg: \(self.isInBackground))")
             startTracking()
         }
     }
@@ -166,6 +169,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         lastFlushTime = Date()
 
         Log.location.notice("Starting tracking (buffer: \(self.buffer.count) points, background: \(self.isInBackground))")
+        recordStateChange("Tracking started (bg: \(isInBackground))")
 
         // Get a good fix first, then go to stationary mode
         beginGettingFix(reason: "Tracking started")
@@ -197,6 +201,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     func handleBackgroundTransition() {
         isInBackground = true
         Log.lifecycle.notice("Background — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking)")
+        if isTracking {
+            recordStateChange("App → background (mode: \(trackingMode.rawValue))")
+        }
 
         // If we're in moving mode when backgrounding, switch to stationary/SLC
         // so iOS doesn't suspend us without a wake mechanism.
@@ -214,6 +221,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     func handleForegroundTransition() {
         isInBackground = false
         Log.lifecycle.notice("Foreground — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking)")
+        if isTracking {
+            recordStateChange("App → foreground (mode: \(trackingMode.rawValue))")
+        }
 
         // If we're stationary but motion was detected while backgrounded,
         // now we can safely switch to continuous GPS.
@@ -364,6 +374,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         locationManager.startMonitoring(for: region)
         Log.location.notice("Geofence set: \(location.coordinate.latitude, format: .fixed(precision: 5)), \(location.coordinate.longitude, format: .fixed(precision: 5)) r=\(Int(self.geofenceRadius))m")
+        recordStateChange("Geofence set r=\(Int(geofenceRadius))m")
     }
 
     /// Remove any active geofence region.
@@ -408,6 +419,10 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let _ = deviceId else { return }
 
+        // Track whether we were already stationary when this callback fired.
+        // If so, this is a genuine SLC wake (not a geofence-exit → fix → stationary cycle).
+        let wasStationary = trackingMode == .stationary
+
         for location in locations {
             // Skip invalid readings
             guard location.horizontalAccuracy >= 0 else { continue }
@@ -442,15 +457,16 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             beginGettingFix(reason: "Stationary for \(Int(stationaryDelay))s")
         }
 
-        // SLC wake while stationary — buffer and flush, stay on SLC
-        if trackingMode == .stationary {
+        // SLC wake while already stationary — log to server so we can see it remotely
+        if wasStationary && trackingMode == .stationary {
             Log.location.notice("SLC wake: received \(locations.count) location(s) while stationary (bg: \(self.isInBackground))")
+            recordStateChange("SLC wake (\(locations.count) pts, bg: \(isInBackground))")
             saveBuffer()
         }
 
-        // Flush if buffer is full or maxBufferAge elapsed (replaces flushTimer)
+        // Flush: immediately when backgrounded (we only have ~10s), otherwise on thresholds
         let timeSinceFlush = Date().timeIntervalSince(lastFlushTime)
-        if buffer.count >= batchSize || timeSinceFlush >= maxBufferAge {
+        if isInBackground || buffer.count >= batchSize || timeSinceFlush >= maxBufferAge {
             lastFlushTime = Date()
             Task { await flushBuffer() }
         }
