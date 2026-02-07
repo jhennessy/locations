@@ -24,7 +24,9 @@ struct SettingsView: View {
                         }
                 }
 
-                Section("Tracking") {
+                Section("Upload") {
+                    Toggle("Aggressive upload", isOn: $locationService.aggressiveUpload)
+
                     VStack(alignment: .leading) {
                         Text("Batch size: \(Int(batchSize)) points")
                         Slider(value: $batchSize, in: 1...50, step: 1)
@@ -32,6 +34,8 @@ struct SettingsView: View {
                                 locationService.batchSize = Int(newValue)
                             }
                     }
+                    .disabled(locationService.aggressiveUpload)
+                    .opacity(locationService.aggressiveUpload ? 0.5 : 1)
 
                     VStack(alignment: .leading) {
                         Text("Max buffer age: \(Int(flushInterval))s")
@@ -40,6 +44,8 @@ struct SettingsView: View {
                                 locationService.maxBufferAge = newValue
                             }
                     }
+                    .disabled(locationService.aggressiveUpload)
+                    .opacity(locationService.aggressiveUpload ? 0.5 : 1)
                 }
 
                 Section("Device") {

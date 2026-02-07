@@ -55,6 +55,17 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - Configuration
 
+    /// When enabled, upload every point immediately (batch size 1, 30s max age).
+    @Published var aggressiveUpload: Bool {
+        didSet {
+            UserDefaults.standard.set(aggressiveUpload, forKey: "aggressive_upload")
+            if aggressiveUpload {
+                batchSize = 1
+                maxBufferAge = 30
+            }
+        }
+    }
+
     /// Number of points to buffer before attempting upload.
     var batchSize = 10
 
@@ -128,7 +139,13 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - Init
 
     override init() {
+        let aggressive = UserDefaults.standard.bool(forKey: "aggressive_upload")
+        self.aggressiveUpload = aggressive
         super.init()
+        if aggressive {
+            batchSize = 1
+            maxBufferAge = 30
+        }
         self.deviceId = UserDefaults.standard.object(forKey: "selected_device_id") as? Int
         locationManager.delegate = self
         locationManager.allowsBackgroundLocationUpdates = true
