@@ -19,6 +19,7 @@ enum TrackingMode: String {
 /// The geofence radius is dynamic: max(20m, lastFixAccuracy * 2.5).
 /// Behavior is identical in foreground and background.
 /// Region monitoring survives app termination and can relaunch after jetsam.
+@MainActor
 class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = LocationService()
 
