@@ -1,36 +1,28 @@
 import Foundation
 import CoreLocation
-import CoreMotion
 import Combine
 
-/// Tracking mode based on detected motion.
+/// Tracking mode: two-state geofence system.
 enum TrackingMode: String {
     case gettingFix = "Getting Fix"
-    case stationary = "Stationary"
-    case moving = "Moving"
+    case sleeping = "Sleeping"
 
     var description: String { rawValue }
 }
 
-/// Manages background location tracking with motion-aware power optimization.
+/// Manages background location tracking with geofence-based power optimization.
 ///
-/// When stationary, uses significant location changes only (low power).
-/// When motion is detected, switches to full GPS tracking.
-/// Before entering stationary mode, acquires a good GPS fix first.
-/// State transitions are recorded as location points with descriptive notes.
+/// Two states:
+/// - Getting Fix: Full GPS to acquire a good reading.
+/// - Sleeping: GPS off, geofence active. On geofence exit, gets a new fix.
 ///
-/// Background wake strategy:
-/// - SLC wakes the app for ~10 seconds on ~500m cell tower changes.
-/// - Region monitoring (100m geofence) wakes the app on shorter movements.
-///   On exit, we get a new fix, buffer it, set a new fence, and go back to sleep.
-/// - Both survive app termination and can relaunch after jetsam.
-/// - Continuous GPS only runs when the app is in the foreground.
+/// The geofence radius is dynamic: max(20m, lastFixAccuracy * 2.5).
+/// Behavior is identical in foreground and background.
+/// Region monitoring survives app termination and can relaunch after jetsam.
 class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = LocationService()
 
     private let locationManager = CLLocationManager()
-    private let motionManager = CMMotionActivityManager()
-    private let motionQueue = OperationQueue()
     private let api = APIService.shared
 
     /// Buffered location points waiting to be uploaded.
@@ -39,8 +31,10 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var lastLocation: CLLocation?
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
     @Published var uploadError: String?
-    @Published var trackingMode: TrackingMode = .stationary
-    @Published var lastMotionActivity: String = "Unknown"
+    @Published var trackingMode: TrackingMode = .sleeping
+
+    /// Accuracy (metres) of the last good GPS fix, used to compute geofence radius.
+    @Published var lastFixAccuracy: Double = 50.0
 
     /// The device ID to report locations for.
     @Published var deviceId: Int? {
@@ -72,31 +66,28 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// Maximum time (seconds) to wait before flushing the buffer regardless of count.
     var maxBufferAge: TimeInterval = 300 // 5 minutes
 
-    /// How long to wait after last motion before switching to stationary mode.
-    private let stationaryDelay: TimeInterval = 120 // 2 minutes
-
     /// Accuracy threshold (metres) to consider a GPS fix "good enough" before going to sleep.
     private let goodFixAccuracy: Double = 50.0
 
-    /// Maximum time (seconds) to wait for a good fix before giving up and going stationary anyway.
+    /// Maximum time (seconds) to wait for a good fix before giving up and going to sleep anyway.
     private let maxFixWait: TimeInterval = 30.0
 
-    /// Radius (metres) for the geofence region monitor. On exit, we wake and get a new fix.
-    private let geofenceRadius: Double = 100.0
+    /// Computed geofence radius: 2.5x the last fix accuracy, minimum 20m.
+    var geofenceRadius: Double {
+        max(20.0, lastFixAccuracy * 2.5)
+    }
 
     /// Identifier for the single monitored geofence region.
     private let geofenceIdentifier = "ch.codelook.locationz.geofence"
 
     // Timer-free state tracking
     private var lastFlushTime: Date = Date()
-    private var lastMovingActivityTime: Date?
     private var fixStartTime: Date?
 
-    private var pendingStationaryReason: String?
-    private var isMotionAvailable: Bool { CMMotionActivityManager.isActivityAvailable() }
+    private var pendingSleepReason: String?
 
     /// Whether the app is currently in the background. Updated by lifecycle handlers.
-    /// Defaults to `true` so that background relaunches (SLC/geofence) are safe —
+    /// Defaults to `true` so that background relaunches (geofence) are safe —
     /// the foreground handler sets it to `false` when the UI appears.
     private var isInBackground = true
 
@@ -154,14 +145,11 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.activityType = .other
         authorizationStatus = locationManager.authorizationStatus
 
-        motionQueue.name = "ch.codelook.locationz.motion"
-        motionQueue.maxConcurrentOperationCount = 1
-
         // Restore any buffered points from a previous session
         loadBuffer()
 
         // Auto-resume tracking if it was active before (works for both GUI launch and
-        // background relaunch by SLC/geofence after jetsam).
+        // background relaunch by geofence after jetsam).
         if UserDefaults.standard.bool(forKey: "tracking_enabled"), deviceId != nil {
             Log.location.notice("Auto-resuming tracking from previous session (bg: \(self.isInBackground))")
             startTracking()
@@ -188,9 +176,8 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         Log.location.notice("Starting tracking (buffer: \(self.buffer.count) points, background: \(self.isInBackground))")
         recordStateChange("Tracking started (bg: \(isInBackground))")
 
-        // Get a good fix first, then go to stationary mode
+        // Get a good fix first, then go to sleep with a geofence
         beginGettingFix(reason: "Tracking started")
-        startMotionUpdates()
     }
 
     func stopTracking() {
@@ -198,14 +185,11 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         isTracking = false
         UserDefaults.standard.set(false, forKey: "tracking_enabled")
-        lastMovingActivityTime = nil
         fixStartTime = nil
-        pendingStationaryReason = nil
+        pendingSleepReason = nil
 
         locationManager.stopUpdatingLocation()
-        locationManager.stopMonitoringSignificantLocationChanges()
         removeGeofence()
-        motionManager.stopActivityUpdates()
 
         recordStateChange("Tracking stopped")
 
@@ -222,13 +206,6 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             recordStateChange("App → background (mode: \(trackingMode.rawValue))")
         }
 
-        // If we're in moving mode when backgrounding, switch to stationary/SLC
-        // so iOS doesn't suspend us without a wake mechanism.
-        if isTracking && trackingMode == .moving {
-            Log.location.notice("Backgrounding while moving → getting fix then SLC")
-            beginGettingFix(reason: "App backgrounded while moving")
-        }
-
         saveBuffer()
         if !buffer.isEmpty {
             Task { await flushBuffer() }
@@ -241,98 +218,19 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         if isTracking {
             recordStateChange("App → foreground (mode: \(trackingMode.rawValue))")
         }
-
-        // If we're stationary but motion was detected while backgrounded,
-        // now we can safely switch to continuous GPS.
-        if isTracking && trackingMode == .stationary {
-            Log.location.notice("Foregrounded while stationary → getting fix")
-            beginGettingFix(reason: "App foregrounded")
-        }
-    }
-
-    // MARK: - Motion detection
-
-    private func startMotionUpdates() {
-        guard isMotionAvailable else {
-            // No motion hardware — fall back to full GPS always
-            Log.motion.warning("Motion detection unavailable, using continuous GPS")
-            switchToMoving(reason: "Motion detection unavailable, using continuous GPS")
-            return
-        }
-
-        motionManager.startActivityUpdates(to: motionQueue) { [weak self] activity in
-            guard let self, let activity, self.isTracking else { return }
-            DispatchQueue.main.async {
-                self.handleMotionActivity(activity)
-            }
-        }
-        Log.motion.notice("Started motion updates")
-    }
-
-    private func handleMotionActivity(_ activity: CMMotionActivity) {
-        let activityName = describeActivity(activity)
-        lastMotionActivity = activityName
-
-        let isMoving = activity.walking || activity.running || activity.cycling || activity.automotive
-
-        if isMoving {
-            Log.motion.debug("Activity: \(activityName) → moving")
-            // Reset stationary countdown
-            lastMovingActivityTime = nil
-
-            if trackingMode != .moving {
-                // Don't switch to continuous GPS when backgrounded —
-                // iOS only gives ~10s of execution after an SLC wake,
-                // not enough for sustained GPS tracking.
-                if isInBackground {
-                    Log.motion.notice("Motion detected while backgrounded (\(activityName)) — staying on SLC")
-                    return
-                }
-                // Cancel any pending fix acquisition too
-                cancelPendingFix()
-                switchToMoving(reason: "Motion detected: \(activityName)")
-            }
-        } else if activity.stationary && trackingMode == .moving {
-            Log.motion.debug("Activity: \(activityName) → stationary detected, starting countdown")
-            // Start the stationary countdown if not already started
-            if lastMovingActivityTime == nil {
-                lastMovingActivityTime = Date()
-            }
-        } else {
-            Log.motion.debug("Activity: \(activityName) (no mode change)")
-        }
-    }
-
-    private func describeActivity(_ activity: CMMotionActivity) -> String {
-        var parts: [String] = []
-        if activity.stationary { parts.append("stationary") }
-        if activity.walking { parts.append("walking") }
-        if activity.running { parts.append("running") }
-        if activity.cycling { parts.append("cycling") }
-        if activity.automotive { parts.append("automotive") }
-        if activity.unknown { parts.append("unknown") }
-        let confidence: String
-        switch activity.confidence {
-        case .high: confidence = "high"
-        case .medium: confidence = "medium"
-        case .low: confidence = "low"
-        @unknown default: confidence = "?"
-        }
-        return "\(parts.joined(separator: "+")) (\(confidence) confidence)"
     }
 
     // MARK: - Mode switching
 
-    /// Start full GPS to acquire a good fix, then transition to stationary.
+    /// Start full GPS to acquire a good fix, then transition to sleeping.
     private func beginGettingFix(reason: String) {
         trackingMode = .gettingFix
-        pendingStationaryReason = reason
+        pendingSleepReason = reason
         fixStartTime = Date()
 
         // Turn on full GPS temporarily
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = kCLDistanceFilterNone
-        locationManager.stopMonitoringSignificantLocationChanges()
         removeGeofence()
         locationManager.startUpdatingLocation()
 
@@ -340,38 +238,33 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         recordStateChange("→ Getting fix: \(reason)")
     }
 
-    /// Called when we get a good fix (or timeout) — finalize the switch to stationary.
-    private func completeStationaryTransition(accuracy: String) {
+    /// Called when we get a good fix (or timeout) — set geofence and go to sleep.
+    private func completeSleepTransition(accuracy: Double, accuracyLabel: String) {
         fixStartTime = nil
-        let reason = pendingStationaryReason ?? "unknown"
-        pendingStationaryReason = nil
+        let reason = pendingSleepReason ?? "unknown"
+        pendingSleepReason = nil
 
-        trackingMode = .stationary
+        // Store accuracy for dynamic geofence radius calculation
+        lastFixAccuracy = accuracy
 
-        // Stop continuous GPS — it wastes battery when stationary and iOS will
-        // terminate us if we use degraded accuracy (sees it as idle).
+        trackingMode = .sleeping
+
+        // Stop continuous GPS
         locationManager.stopUpdatingLocation()
 
-        // SLC wakes us from suspension AND can relaunch after termination.
-        locationManager.startMonitoringSignificantLocationChanges()
-
-        // Region monitor (100m geofence) gives finer-grained wakes than SLC (~500m).
+        // Set geofence with dynamic radius based on fix accuracy
         setupGeofence()
 
-        Log.location.notice("→ Stationary (\(accuracy)): \(reason). SLC + geofence active.")
-        recordStateChange("→ Stationary (\(accuracy)): \(reason)")
+        let radiusStr = String(format: "%.0f", geofenceRadius)
+        Log.location.notice("→ Sleeping (\(accuracyLabel)): \(reason). Geofence r=\(radiusStr)m active.")
+        recordStateChange("→ Sleeping (\(accuracyLabel)): \(reason)")
 
         saveBuffer()
     }
 
-    private func cancelPendingFix() {
-        fixStartTime = nil
-        pendingStationaryReason = nil
-    }
-
     // MARK: - Region monitoring (geofence)
 
-    /// Set up a 100m geofence around the current position. Replaces any existing fence.
+    /// Set up a geofence around the current position. Radius is dynamic based on fix accuracy.
     private func setupGeofence() {
         guard let location = lastLocation ?? locationManager.location else {
             Log.location.warning("Cannot set up geofence: no location available")
@@ -405,24 +298,6 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    private func switchToMoving(reason: String) {
-        let previousMode = trackingMode
-        trackingMode = .moving
-        lastMovingActivityTime = nil
-
-        // Full GPS tracking
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
-        locationManager.distanceFilter = 10
-        locationManager.stopMonitoringSignificantLocationChanges()
-        removeGeofence()
-        locationManager.startUpdatingLocation()
-
-        if previousMode != .moving {
-            Log.location.notice("→ Moving (was \(previousMode.rawValue)): \(reason)")
-            recordStateChange("→ Moving: \(reason)")
-        }
-    }
-
     // MARK: - State change recording
 
     private func recordStateChange(_ description: String) {
@@ -437,10 +312,6 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let _ = deviceId else { return }
 
-        // Track whether we were already stationary when this callback fired.
-        // If so, this is a genuine SLC wake (not a geofence-exit → fix → stationary cycle).
-        let wasStationary = trackingMode == .stationary
-
         for location in locations {
             // Skip invalid readings
             guard location.horizontalAccuracy >= 0 else { continue }
@@ -454,32 +325,22 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             // If we're waiting for a good fix, check if this one qualifies
             if trackingMode == .gettingFix && location.horizontalAccuracy <= goodFixAccuracy {
                 Log.location.notice("Good fix acquired: \(location.horizontalAccuracy, format: .fixed(precision: 0))m")
-                completeStationaryTransition(
-                    accuracy: String(format: "%.0fm accuracy", location.horizontalAccuracy)
+                completeSleepTransition(
+                    accuracy: location.horizontalAccuracy,
+                    accuracyLabel: String(format: "%.0fm accuracy", location.horizontalAccuracy)
                 )
             }
         }
 
-        // Check fix timeout (replaces fixTimeoutTimer)
+        // Check fix timeout
         if trackingMode == .gettingFix, let start = fixStartTime,
            Date().timeIntervalSince(start) >= maxFixWait {
-            Log.location.warning("Fix timeout after \(Int(self.maxFixWait))s")
-            completeStationaryTransition(accuracy: "timeout after \(Int(maxFixWait))s")
-        }
-
-        // Check stationary transition (replaces stationaryTimer)
-        if trackingMode == .moving, let motionTime = lastMovingActivityTime,
-           Date().timeIntervalSince(motionTime) >= stationaryDelay {
-            Log.location.notice("Stationary countdown elapsed (\(Int(self.stationaryDelay))s)")
-            lastMovingActivityTime = nil
-            beginGettingFix(reason: "Stationary for \(Int(stationaryDelay))s")
-        }
-
-        // SLC wake while already stationary — log to server so we can see it remotely
-        if wasStationary && trackingMode == .stationary {
-            Log.location.notice("SLC wake: received \(locations.count) location(s) while stationary (bg: \(self.isInBackground))")
-            recordStateChange("SLC wake (\(locations.count) pts, bg: \(isInBackground))")
-            saveBuffer()
+            let fallbackAccuracy = lastLocation?.horizontalAccuracy ?? lastFixAccuracy
+            Log.location.warning("Fix timeout after \(Int(self.maxFixWait))s, using accuracy \(fallbackAccuracy, format: .fixed(precision: 0))m")
+            completeSleepTransition(
+                accuracy: fallbackAccuracy,
+                accuracyLabel: "timeout after \(Int(maxFixWait))s"
+            )
         }
 
         // Flush: immediately when backgrounded (we only have ~10s), otherwise on thresholds
@@ -501,11 +362,11 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager) {
-        Log.location.warning("iOS PAUSED location updates — resuming immediately")
+        Log.location.warning("iOS PAUSED location updates")
         recordStateChange("iOS paused location updates")
-        if isTracking && trackingMode != .stationary {
+        if isTracking && trackingMode == .gettingFix {
             manager.startUpdatingLocation()
-            Log.location.notice("Resumed location updates after iOS pause")
+            Log.location.notice("Resumed location updates after iOS pause (getting fix)")
         }
     }
 
@@ -517,16 +378,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard region.identifier == geofenceIdentifier, isTracking else { return }
 
         Log.location.notice("Geofence exit detected (bg: \(self.isInBackground), mode: \(self.trackingMode.rawValue))")
-        recordStateChange("Geofence exit")
+        recordStateChange("Geofence exit (bg: \(isInBackground))")
 
-        if isInBackground {
-            // We're woken for ~10 seconds. Get a quick fix, buffer it, re-fence, flush.
-            beginGettingFix(reason: "Geofence exit (background)")
-        } else {
-            // Foreground — switch to full GPS tracking
-            cancelPendingFix()
-            switchToMoving(reason: "Geofence exit (foreground)")
-        }
+        beginGettingFix(reason: "Geofence exit")
     }
 
     func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {

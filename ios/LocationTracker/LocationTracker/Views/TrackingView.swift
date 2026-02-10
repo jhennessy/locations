@@ -60,7 +60,7 @@ struct TrackingView: View {
                     .labelsHidden()
                 }
 
-                // Motion state
+                // Tracking state
                 if locationService.isTracking {
                     HStack(spacing: 8) {
                         Image(systemName: trackingModeIcon)
@@ -68,11 +68,13 @@ struct TrackingView: View {
                         Text(locationService.trackingMode.description)
                             .font(.subheadline.bold())
                             .foregroundStyle(trackingModeColor)
-                        Text("·")
-                            .foregroundStyle(.secondary)
-                        Text(locationService.lastMotionActivity)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        if locationService.trackingMode == .sleeping {
+                            Text("·")
+                                .foregroundStyle(.secondary)
+                            Text("Fence: \(Int(locationService.geofenceRadius))m")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -127,16 +129,14 @@ struct TrackingView: View {
     private var trackingModeIcon: String {
         switch locationService.trackingMode {
         case .gettingFix: return "antenna.radiowaves.left.and.right"
-        case .stationary: return "moon.zzz.fill"
-        case .moving: return "figure.walk"
+        case .sleeping: return "moon.zzz.fill"
         }
     }
 
     private var trackingModeColor: Color {
         switch locationService.trackingMode {
         case .gettingFix: return .blue
-        case .stationary: return .orange
-        case .moving: return .green
+        case .sleeping: return .orange
         }
     }
 

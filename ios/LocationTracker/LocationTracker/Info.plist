@@ -10,8 +10,6 @@
 	<string>Locationz needs access to your location to record your position and send it to the server.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Locationz needs always-on location access to track your position in the background.</string>
-	<key>NSMotionUsageDescription</key>
-	<string>Locationz uses motion data to detect when you are moving and optimize battery usage by reducing GPS polling when stationary.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

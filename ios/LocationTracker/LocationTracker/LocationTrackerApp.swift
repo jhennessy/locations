@@ -6,7 +6,7 @@ struct LocationTrackerApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     /// Eagerly initialize LocationService so it starts tracking even when
-    /// the app is relaunched in the background by SLC after jetsam.
+    /// the app is relaunched in the background by a geofence event after jetsam.
     private let locationService = LocationService.shared
 
     var body: some Scene {

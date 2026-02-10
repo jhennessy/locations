@@ -16,9 +16,6 @@ enum Log {
     /// Location tracking, mode changes, CLLocationManager events
     static let location = Logger(subsystem: subsystem, category: "location")
 
-    /// Motion detection (CMMotionActivityManager)
-    static let motion = Logger(subsystem: subsystem, category: "motion")
-
     /// Network uploads, API calls
     static let network = Logger(subsystem: subsystem, category: "network")
 
