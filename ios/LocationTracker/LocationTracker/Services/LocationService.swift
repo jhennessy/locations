@@ -22,7 +22,7 @@ enum TrackingMode: String {
 /// Behavior is identical in foreground and background.
 /// Region monitoring survives app termination and can relaunch after jetsam.
 @MainActor
-class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
+class LocationService: NSObject, ObservableObject {
     static let shared = LocationService()
 
     private let locationManager = CLLocationManager()
@@ -427,9 +427,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         buffer.append(point)
     }
 
-    // MARK: - CLLocationManagerDelegate
+    // MARK: - Delegate entry points (called from nonisolated extension)
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    func handleLocations(_ locations: [CLLocation]) {
         guard let _ = deviceId else { return }
 
         for location in locations {
@@ -516,17 +516,13 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    func handleAuthorizationChange(_ manager: CLLocationManager) {
         let newStatus = manager.authorizationStatus
         authorizationStatus = newStatus
         Log.location.notice("Authorization changed: \(String(describing: newStatus))")
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        Log.location.error("CLLocationManager error: \(error.localizedDescription)")
-    }
-
-    func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager) {
+    func handlePause(_ manager: CLLocationManager) {
         Log.location.warning("iOS PAUSED location updates")
         recordStateChange("iOS paused location updates")
         if isTracking && (trackingMode == .gettingFix || trackingMode == .continuous) {
@@ -535,21 +531,13 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    func locationManagerDidResumeLocationUpdates(_ manager: CLLocationManager) {
-        Log.location.notice("iOS resumed location updates")
-    }
-
-    func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
+    func handleRegionExit(_ region: CLRegion) {
         guard region.identifier == geofenceIdentifier, isTracking else { return }
 
         Log.location.notice("Geofence exit detected (bg: \(self.isInBackground), mode: \(self.trackingMode.rawValue))")
         recordStateChange("Geofence exit (bg: \(isInBackground))")
 
         beginGettingFix(reason: "Geofence exit")
-    }
-
-    func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
-        Log.location.error("Region monitoring failed for \(region?.identifier ?? "nil"): \(error.localizedDescription)")
     }
 
     // MARK: - Buffer flush
@@ -575,5 +563,37 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             saveBuffer()
             Log.network.error("Upload failed (\(pointsToUpload.count) points): \(error.localizedDescription)")
         }
+    }
+}
+
+// MARK: - CLLocationManagerDelegate (nonisolated to satisfy protocol, dispatches to MainActor)
+
+extension LocationService: CLLocationManagerDelegate {
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        MainActor.assumeIsolated { handleLocations(locations) }
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        MainActor.assumeIsolated { handleAuthorizationChange(manager) }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Log.location.error("CLLocationManager error: \(error.localizedDescription)")
+    }
+
+    nonisolated func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager) {
+        MainActor.assumeIsolated { handlePause(manager) }
+    }
+
+    nonisolated func locationManagerDidResumeLocationUpdates(_ manager: CLLocationManager) {
+        Log.location.notice("iOS resumed location updates")
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
+        MainActor.assumeIsolated { handleRegionExit(region) }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
+        Log.location.error("Region monitoring failed for \(region?.identifier ?? "nil"): \(error.localizedDescription)")
     }
 }
