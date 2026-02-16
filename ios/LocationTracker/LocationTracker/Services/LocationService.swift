@@ -18,7 +18,7 @@ enum TrackingMode: String {
 /// - Getting Fix: Full GPS to acquire a good reading.
 /// - Sleeping: GPS off, geofence active. On geofence exit, gets a new fix.
 ///
-/// The geofence radius is dynamic: max(20m, lastFixAccuracy * 2.5).
+/// The geofence radius is dynamic: max(20m, accuracy × 1.5, speed × 10).
 /// Behavior is identical in foreground and background.
 /// Region monitoring survives app termination and can relaunch after jetsam.
 @MainActor
@@ -38,6 +38,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// Accuracy (metres) of the last good GPS fix, used to compute geofence radius.
     @Published var lastFixAccuracy: Double = 50.0
+
+    /// Last known speed (m/s), clamped to ≥ 0. Used to scale geofence radius.
+    @Published var lastSpeed: Double = 0.0
 
     /// Whether the device is currently plugged in (charging or full).
     @Published var isCharging: Bool = false
@@ -78,12 +81,18 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// Maximum time (seconds) to wait for a good fix before giving up and going to sleep anyway.
     private let maxFixWait: TimeInterval = 30.0
 
+    /// Accuracy threshold (metres) that's good enough to skip settling and transition immediately.
+    private let excellentFixAccuracy: Double = 15.0
+
+    /// How long (seconds) to keep GPS on after the first acceptable fix, hoping for a better one.
+    private let settlingDuration: TimeInterval = 15.0
+
     /// Distance filter (metres) used in continuous tracking mode while charging.
     private let continuousDistanceFilter: Double = 10.0
 
-    /// Computed geofence radius: 2.5x the last fix accuracy, minimum 20m.
+    /// Computed geofence radius: max of 20m floor, 1.5× accuracy, and 10× speed (~10s of travel).
     var geofenceRadius: Double {
-        max(20.0, lastFixAccuracy * 2.5)
+        max(20.0, lastFixAccuracy * 1.5, lastSpeed * 10.0)
     }
 
     /// Identifier for the single monitored geofence region.
@@ -92,6 +101,11 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     // Timer-free state tracking
     private var lastFlushTime: Date = Date()
     private var fixStartTime: Date?
+
+    /// When the first acceptable (≤ goodFixAccuracy) fix arrived during gettingFix.
+    private var settlingStartTime: Date?
+    /// Best accuracy seen during the settling window.
+    private var bestSettlingAccuracy: Double = .infinity
 
     /// Cached charging state to detect changes in foreground transitions.
     private var lastKnownChargingState: Bool = false
@@ -254,6 +268,8 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         UserDefaults.standard.set(false, forKey: "tracking_enabled")
         fixStartTime = nil
         pendingSleepReason = nil
+        settlingStartTime = nil
+        bestSettlingAccuracy = .infinity
 
         locationManager.stopUpdatingLocation()
         removeGeofence()
@@ -309,6 +325,8 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         trackingMode = .gettingFix
         pendingSleepReason = reason
         fixStartTime = Date()
+        settlingStartTime = nil
+        bestSettlingAccuracy = .infinity
 
         // Turn on full GPS temporarily
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
@@ -325,6 +343,8 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         fixStartTime = nil
         let reason = pendingSleepReason ?? "unknown"
         pendingSleepReason = nil
+        settlingStartTime = nil
+        bestSettlingAccuracy = .infinity
 
         // Store accuracy for dynamic geofence radius calculation
         lastFixAccuracy = accuracy
@@ -349,6 +369,8 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         trackingMode = .continuous
         fixStartTime = nil
         pendingSleepReason = nil
+        settlingStartTime = nil
+        bestSettlingAccuracy = .infinity
 
         removeGeofence()
 
@@ -417,27 +439,64 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             let point = LocationPoint(from: location)
             buffer.append(point)
             lastLocation = location
+            lastSpeed = max(0.0, location.speed)
 
-            Log.location.debug("Location: \(location.coordinate.latitude, format: .fixed(precision: 5)), \(location.coordinate.longitude, format: .fixed(precision: 5)) acc=\(location.horizontalAccuracy, format: .fixed(precision: 0))m mode=\(self.trackingMode.rawValue)")
+            Log.location.debug("Location: \(location.coordinate.latitude, format: .fixed(precision: 5)), \(location.coordinate.longitude, format: .fixed(precision: 5)) acc=\(location.horizontalAccuracy, format: .fixed(precision: 0))m spd=\(self.lastSpeed, format: .fixed(precision: 1))m/s mode=\(self.trackingMode.rawValue)")
 
             // If we're waiting for a good fix, check if this one qualifies
-            if trackingMode == .gettingFix && location.horizontalAccuracy <= goodFixAccuracy {
-                Log.location.notice("Good fix acquired: \(location.horizontalAccuracy, format: .fixed(precision: 0))m")
-                if isCharging {
-                    startContinuousMode(reason: "Good fix while charging")
-                } else {
-                    completeSleepTransition(
-                        accuracy: location.horizontalAccuracy,
-                        accuracyLabel: String(format: "%.0fm accuracy", location.horizontalAccuracy)
-                    )
+            if trackingMode == .gettingFix {
+                let accuracy = location.horizontalAccuracy
+
+                if accuracy <= excellentFixAccuracy {
+                    // Excellent fix — transition immediately, no settling needed
+                    Log.location.notice("Excellent fix: \(accuracy, format: .fixed(precision: 0))m — skipping settling")
+                    if isCharging {
+                        startContinuousMode(reason: "Excellent fix while charging")
+                    } else {
+                        completeSleepTransition(
+                            accuracy: accuracy,
+                            accuracyLabel: String(format: "%.0fm excellent", accuracy)
+                        )
+                    }
+                } else if accuracy <= goodFixAccuracy {
+                    if settlingStartTime == nil {
+                        // First acceptable fix — start settling window
+                        settlingStartTime = Date()
+                        bestSettlingAccuracy = accuracy
+                        Log.location.notice("Settling started: \(accuracy, format: .fixed(precision: 0))m — waiting up to \(Int(self.settlingDuration))s for improvement")
+                    } else {
+                        // Already settling — track best accuracy
+                        if accuracy < bestSettlingAccuracy {
+                            Log.location.debug("Settling improved: \(self.bestSettlingAccuracy, format: .fixed(precision: 0))m → \(accuracy, format: .fixed(precision: 0))m")
+                            bestSettlingAccuracy = accuracy
+                        }
+                    }
+
+                    // Check if settling window has elapsed
+                    if let settleStart = settlingStartTime,
+                       Date().timeIntervalSince(settleStart) >= settlingDuration {
+                        let elapsed = Date().timeIntervalSince(settleStart)
+                        Log.location.notice("Settling complete: \(self.bestSettlingAccuracy, format: .fixed(precision: 0))m over \(elapsed, format: .fixed(precision: 0))s")
+                        if isCharging {
+                            startContinuousMode(reason: "Settled fix while charging")
+                        } else {
+                            completeSleepTransition(
+                                accuracy: bestSettlingAccuracy,
+                                accuracyLabel: String(format: "%.0fm settled", bestSettlingAccuracy)
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // Check fix timeout
+        // Check fix timeout (30s hard backstop)
         if trackingMode == .gettingFix, let start = fixStartTime,
            Date().timeIntervalSince(start) >= maxFixWait {
-            let fallbackAccuracy = lastLocation?.horizontalAccuracy ?? lastFixAccuracy
+            // Use best settling accuracy if we were settling, otherwise fall back to last fix
+            let fallbackAccuracy = bestSettlingAccuracy.isFinite
+                ? bestSettlingAccuracy
+                : (lastLocation?.horizontalAccuracy ?? lastFixAccuracy)
             Log.location.warning("Fix timeout after \(Int(self.maxFixWait))s, using accuracy \(fallbackAccuracy, format: .fixed(precision: 0))m")
             if isCharging {
                 startContinuousMode(reason: "Fix timeout while charging")

@@ -74,6 +74,13 @@ struct TrackingView: View {
                             Text("Fence: \(Int(locationService.geofenceRadius))m")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if locationService.lastSpeed > 0.5 {
+                                Text("·")
+                                    .foregroundStyle(.secondary)
+                                Text(String(format: "%.0f km/h", locationService.lastSpeed * 3.6))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         if locationService.trackingMode == .continuous {
                             Text("·")

@@ -36,16 +36,3 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-      - name: Trigger deploy
-        run: |
-          response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" --max-time 15 -X POST \
-            https://locations.codelook.ch/api/deploy \
-            -H "Authorization: Bearer ${{ secrets.DEPLOY_TOKEN }}")
-          body=$(echo "$response" | sed '$d')
-          status=$(echo "$response" | tail -1 | sed 's/HTTP_STATUS://')
-          echo "Response body: $body"
-          echo "HTTP status: $status"
-          if [ "$status" -ge 400 ] 2>/dev/null; then
-            echo "::error::Deploy failed with HTTP $status: $body"
-            exit 1
-          fi
