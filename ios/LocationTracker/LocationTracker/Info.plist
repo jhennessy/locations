@@ -10,6 +10,8 @@
 	<string>Locationz needs access to your location to record your position and send it to the server.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Locationz needs always-on location access to track your position in the background.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
