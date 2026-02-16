@@ -75,6 +75,23 @@ struct TrackingView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        if locationService.trackingMode == .continuous {
+                            Text("·")
+                                .foregroundStyle(.secondary)
+                            Text("10m filter")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if locationService.isCharging {
+                            Text("·")
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "bolt.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                            Text("Charging")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
                     }
                 }
 
@@ -130,6 +147,7 @@ struct TrackingView: View {
         switch locationService.trackingMode {
         case .gettingFix: return "antenna.radiowaves.left.and.right"
         case .sleeping: return "moon.zzz.fill"
+        case .continuous: return "arrow.triangle.swap"
         }
     }
 
@@ -137,6 +155,7 @@ struct TrackingView: View {
         switch locationService.trackingMode {
         case .gettingFix: return .blue
         case .sleeping: return .orange
+        case .continuous: return .green
         }
     }
 

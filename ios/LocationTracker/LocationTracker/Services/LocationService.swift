@@ -1,11 +1,13 @@
 import Foundation
 import CoreLocation
 import Combine
+import UIKit
 
-/// Tracking mode: two-state geofence system.
+/// Tracking mode: geofence system with continuous mode when charging.
 enum TrackingMode: String {
     case gettingFix = "Getting Fix"
     case sleeping = "Sleeping"
+    case continuous = "Continuous"
 
     var description: String { rawValue }
 }
@@ -36,6 +38,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// Accuracy (metres) of the last good GPS fix, used to compute geofence radius.
     @Published var lastFixAccuracy: Double = 50.0
+
+    /// Whether the device is currently plugged in (charging or full).
+    @Published var isCharging: Bool = false
 
     /// The device ID to report locations for.
     @Published var deviceId: Int? {
@@ -73,6 +78,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// Maximum time (seconds) to wait for a good fix before giving up and going to sleep anyway.
     private let maxFixWait: TimeInterval = 30.0
 
+    /// Distance filter (metres) used in continuous tracking mode while charging.
+    private let continuousDistanceFilter: Double = 10.0
+
     /// Computed geofence radius: 2.5x the last fix accuracy, minimum 20m.
     var geofenceRadius: Double {
         max(20.0, lastFixAccuracy * 2.5)
@@ -84,6 +92,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     // Timer-free state tracking
     private var lastFlushTime: Date = Date()
     private var fixStartTime: Date?
+
+    /// Cached charging state to detect changes in foreground transitions.
+    private var lastKnownChargingState: Bool = false
 
     private var pendingSleepReason: String?
 
@@ -146,6 +157,17 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.activityType = .other
         authorizationStatus = locationManager.authorizationStatus
 
+        // Battery monitoring for continuous tracking while charging
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        isCharging = Self.deviceIsCharging()
+        lastKnownChargingState = isCharging
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(batteryStateDidChange),
+            name: UIDevice.batteryStateDidChangeNotification,
+            object: nil
+        )
+
         // Restore any buffered points from a previous session
         loadBuffer()
 
@@ -157,10 +179,54 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    private static func deviceIsCharging() -> Bool {
+        let state = UIDevice.current.batteryState
+        return state == .charging || state == .full
+    }
+
     // MARK: - Permissions
 
     func requestPermission() {
         locationManager.requestAlwaysAuthorization()
+    }
+
+    // MARK: - Battery state
+
+    @objc private func batteryStateDidChange(_ notification: Notification) {
+        let wasCharging = isCharging
+        isCharging = Self.deviceIsCharging()
+        lastKnownChargingState = isCharging
+
+        guard wasCharging != isCharging else { return }
+
+        if isCharging {
+            Log.lifecycle.notice("Charger connected")
+            recordStateChange("Charger connected")
+            handlePluggedIn()
+        } else {
+            Log.lifecycle.notice("Charger disconnected")
+            recordStateChange("Charger disconnected")
+            handleUnplugged()
+        }
+    }
+
+    private func handlePluggedIn() {
+        guard isTracking else { return }
+        switch trackingMode {
+        case .sleeping:
+            startContinuousMode(reason: "Charger connected")
+        case .gettingFix:
+            Log.location.notice("Charger connected while getting fix — will route to continuous after fix")
+        case .continuous:
+            break
+        }
+    }
+
+    private func handleUnplugged() {
+        guard isTracking else { return }
+        if trackingMode == .continuous {
+            beginGettingFix(reason: "Charger disconnected")
+        }
     }
 
     // MARK: - Tracking control
@@ -202,9 +268,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func handleBackgroundTransition() {
         isInBackground = true
-        Log.lifecycle.notice("Background — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking)")
+        Log.lifecycle.notice("Background — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking), charging: \(self.isCharging)")
         if isTracking {
-            recordStateChange("App → background (mode: \(trackingMode.rawValue))")
+            recordStateChange("App → background (mode: \(trackingMode.rawValue), charging: \(isCharging))")
         }
 
         saveBuffer()
@@ -218,6 +284,21 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         Log.lifecycle.notice("Foreground — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking)")
         if isTracking {
             recordStateChange("App → foreground (mode: \(trackingMode.rawValue))")
+        }
+
+        // Re-check charging state — notifications may have been missed while suspended
+        let currentlyCharging = Self.deviceIsCharging()
+        if currentlyCharging != lastKnownChargingState {
+            Log.lifecycle.notice("Charging state changed while suspended: \(self.lastKnownChargingState) → \(currentlyCharging)")
+            isCharging = currentlyCharging
+            lastKnownChargingState = currentlyCharging
+            if currentlyCharging {
+                recordStateChange("Charger connected (detected on foreground)")
+                handlePluggedIn()
+            } else {
+                recordStateChange("Charger disconnected (detected on foreground)")
+                handleUnplugged()
+            }
         }
     }
 
@@ -261,6 +342,22 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         recordStateChange("→ Sleeping (\(accuracyLabel)): \(reason)")
 
         saveBuffer()
+    }
+
+    /// Switch to continuous GPS tracking (used while charging).
+    private func startContinuousMode(reason: String) {
+        trackingMode = .continuous
+        fixStartTime = nil
+        pendingSleepReason = nil
+
+        removeGeofence()
+
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+        locationManager.distanceFilter = continuousDistanceFilter
+        locationManager.startUpdatingLocation()
+
+        Log.location.notice("→ Continuous: \(reason) (filter: \(self.continuousDistanceFilter)m)")
+        recordStateChange("→ Continuous: \(reason)")
     }
 
     // MARK: - Region monitoring (geofence)
@@ -326,10 +423,14 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             // If we're waiting for a good fix, check if this one qualifies
             if trackingMode == .gettingFix && location.horizontalAccuracy <= goodFixAccuracy {
                 Log.location.notice("Good fix acquired: \(location.horizontalAccuracy, format: .fixed(precision: 0))m")
-                completeSleepTransition(
-                    accuracy: location.horizontalAccuracy,
-                    accuracyLabel: String(format: "%.0fm accuracy", location.horizontalAccuracy)
-                )
+                if isCharging {
+                    startContinuousMode(reason: "Good fix while charging")
+                } else {
+                    completeSleepTransition(
+                        accuracy: location.horizontalAccuracy,
+                        accuracyLabel: String(format: "%.0fm accuracy", location.horizontalAccuracy)
+                    )
+                }
             }
         }
 
@@ -338,10 +439,14 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
            Date().timeIntervalSince(start) >= maxFixWait {
             let fallbackAccuracy = lastLocation?.horizontalAccuracy ?? lastFixAccuracy
             Log.location.warning("Fix timeout after \(Int(self.maxFixWait))s, using accuracy \(fallbackAccuracy, format: .fixed(precision: 0))m")
-            completeSleepTransition(
-                accuracy: fallbackAccuracy,
-                accuracyLabel: "timeout after \(Int(maxFixWait))s"
-            )
+            if isCharging {
+                startContinuousMode(reason: "Fix timeout while charging")
+            } else {
+                completeSleepTransition(
+                    accuracy: fallbackAccuracy,
+                    accuracyLabel: "timeout after \(Int(maxFixWait))s"
+                )
+            }
         }
 
         // Flush: immediately when backgrounded (we only have ~10s), otherwise on thresholds
@@ -365,9 +470,9 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
     func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager) {
         Log.location.warning("iOS PAUSED location updates")
         recordStateChange("iOS paused location updates")
-        if isTracking && trackingMode == .gettingFix {
+        if isTracking && (trackingMode == .gettingFix || trackingMode == .continuous) {
             manager.startUpdatingLocation()
-            Log.location.notice("Resumed location updates after iOS pause (getting fix)")
+            Log.location.notice("Resumed location updates after iOS pause (\(self.trackingMode.rawValue))")
         }
     }
 
