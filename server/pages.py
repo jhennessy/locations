@@ -87,6 +87,7 @@ def _nav_drawer(user=None):
         _nav_link("dashboard", "Dashboard", "/")
         _nav_link("phone_iphone", "Devices", "/devices")
         _nav_link("map", "Map", "/map")
+        _nav_link("my_location", "Positions", "/positions")
         _nav_link("place", "Visits", "/visits")
         _nav_link("star", "Frequent Places", "/places")
         ui.separator().classes("q-my-sm")
@@ -659,6 +660,117 @@ async def map_page():
             user_selector.on_value_change(lambda _: refresh_devices())
         selected_device.on_value_change(lambda _: render_map())
         render_map()
+
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# Positions page
+# ---------------------------------------------------------------------------
+@ui.page("/positions")
+async def positions_page():
+    await _ensure_timezone()
+    db, user = get_session_user()
+    if user is None:
+        ui.navigate.to("/login")
+        return
+
+    _header(user)
+    _nav_drawer(user)
+
+    with ui.column().classes("q-pa-md w-full"):
+        ui.label("Positions").classes("text-h5 q-mb-md")
+        ui.label(
+            "Raw GPS positions recorded by the device."
+        ).classes("text-caption text-grey q-mb-md")
+        _, user_selector = _admin_user_selector(db, user)
+
+        uid = _selected_uid(user_selector, user)
+        devices = db.query(Device).filter(Device.user_id == uid).all()
+        device_options = {d.id: d.name for d in devices}
+        selected_device = ui.select(
+            options=device_options,
+            label="Select Device",
+            value=devices[0].id if devices else None,
+        ).classes("w-64 q-mb-md")
+
+        content = ui.column().classes("w-full")
+
+        def refresh_devices():
+            inner_db = SessionLocal()
+            uid = _selected_uid(user_selector, user)
+            devs = inner_db.query(Device).filter(Device.user_id == uid).all()
+            inner_db.close()
+            selected_device.options = {d.id: d.name for d in devs}
+            selected_device.value = devs[0].id if devs else None
+            render_positions()
+
+        def render_positions():
+            content.clear()
+            if not selected_device.value:
+                with content:
+                    ui.label("No position data available.").classes("text-grey")
+                return
+            inner_db = SessionLocal()
+            locations = (
+                inner_db.query(Location)
+                .filter(Location.device_id == selected_device.value)
+                .order_by(Location.timestamp.desc())
+                .limit(2000)
+                .all()
+            )
+
+            with content:
+                if not locations:
+                    ui.label("No positions recorded yet.").classes("text-grey")
+                    inner_db.close()
+                    return
+
+                rows = [
+                    {
+                        "id": loc.id,
+                        "time": _fmt(loc.timestamp),
+                        "lat": round(loc.latitude, 6),
+                        "lon": round(loc.longitude, 6),
+                        "altitude": f"{loc.altitude:.1f}m" if loc.altitude is not None else "-",
+                        "speed": f"{loc.speed:.1f} m/s" if loc.speed is not None else "-",
+                        "course": f"{loc.course:.0f}\u00b0" if loc.course is not None else "-",
+                        "h_acc": f"{loc.horizontal_accuracy:.0f}m" if loc.horizontal_accuracy is not None else "-",
+                        "v_acc": f"{loc.vertical_accuracy:.0f}m" if loc.vertical_accuracy is not None else "-",
+                        "received": _fmt(loc.received_at),
+                        "batch": loc.batch_id or "-",
+                        "notes": loc.notes or "-",
+                    }
+                    for loc in locations
+                ]
+
+                ui.aggrid({
+                    "columnDefs": [
+                        {"headerName": "#", "field": "id", "width": 80, "sortable": True, "filter": "agNumberColumnFilter"},
+                        {"headerName": "Time", "field": "time", "width": 180, "sortable": True, "filter": True},
+                        {"headerName": "Lat", "field": "lat", "width": 120, "sortable": True, "filter": "agNumberColumnFilter"},
+                        {"headerName": "Lon", "field": "lon", "width": 120, "sortable": True, "filter": "agNumberColumnFilter"},
+                        {"headerName": "Altitude", "field": "altitude", "width": 100, "sortable": True, "filter": True},
+                        {"headerName": "Speed", "field": "speed", "width": 110, "sortable": True, "filter": True},
+                        {"headerName": "Course", "field": "course", "width": 90, "sortable": True, "filter": True},
+                        {"headerName": "H. Acc", "field": "h_acc", "width": 90, "sortable": True, "filter": True},
+                        {"headerName": "V. Acc", "field": "v_acc", "width": 90, "sortable": True, "filter": True},
+                        {"headerName": "Received", "field": "received", "width": 180, "sortable": True, "filter": True},
+                        {"headerName": "Batch", "field": "batch", "width": 120, "sortable": True, "filter": True},
+                        {"headerName": "Notes", "field": "notes", "width": 150, "sortable": True, "filter": True},
+                    ],
+                    "rowData": rows,
+                    "defaultColDef": {"resizable": True},
+                    "pagination": True,
+                    "paginationPageSize": 50,
+                }).classes("w-full").style("height: 600px")
+
+            inner_db.close()
+
+        if user_selector:
+            user_selector.on_value_change(lambda _: refresh_devices())
+        selected_device.on_value_change(lambda _: render_positions())
+        render_positions()
 
     db.close()
 
