@@ -11,6 +11,8 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private let locationManager = CLLocationManager()
     private let api = APIService.shared
+    private let bluetooth = BluetoothService.shared
+    private var lastPositionUploadTime: Date = .distantPast
 
     /// Buffered location points waiting to be uploaded.
     @Published var buffer: [LocationPoint] = []
@@ -66,6 +68,7 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.startUpdatingLocation()
         isTracking = true
         startFlushTimer()
+        bluetooth.start()
     }
 
     func stopTracking() {
@@ -73,8 +76,17 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
         isTracking = false
         flushTimer?.invalidate()
         flushTimer = nil
+        bluetooth.stop()
         // Flush remaining buffer
         Task { await flushBuffer() }
+    }
+
+    func handleEnterBackground() {
+        bluetooth.isBackground = true
+    }
+
+    func handleEnterForeground() {
+        bluetooth.isBackground = false
     }
 
     // MARK: - Timer
@@ -100,6 +112,38 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             let point = LocationPoint(from: location)
             buffer.append(point)
             lastLocation = location
+
+            // Update BLE position for nearby peer sharing
+            if let deviceId = UserDefaults.standard.object(forKey: "selected_device_id") as? Int {
+                bluetooth.currentPosition = BLEPosition(
+                    uid: UserDefaults.standard.integer(forKey: "user_id"),
+                    un: UserDefaults.standard.string(forKey: "username") ?? "",
+                    did: deviceId,
+                    lat: location.coordinate.latitude,
+                    lon: location.coordinate.longitude,
+                    alt: location.altitude,
+                    acc: location.horizontalAccuracy,
+                    spd: location.speed >= 0 ? location.speed : nil,
+                    ts: location.timestamp.timeIntervalSince1970
+                )
+            }
+
+            // Periodic position upload every 15s
+            if Date().timeIntervalSince(lastPositionUploadTime) >= 15,
+               let deviceId = UserDefaults.standard.object(forKey: "selected_device_id") as? Int {
+                lastPositionUploadTime = Date()
+                Task {
+                    await APIService.shared.updatePosition(
+                        deviceId: deviceId,
+                        latitude: location.coordinate.latitude,
+                        longitude: location.coordinate.longitude,
+                        altitude: location.altitude,
+                        accuracy: location.horizontalAccuracy,
+                        speed: location.speed >= 0 ? location.speed : nil,
+                        timestamp: location.timestamp
+                    )
+                }
+            }
         }
 
         // Flush if buffer is full
@@ -129,6 +173,10 @@ class LocationService: NSObject, ObservableObject, CLLocationManagerDelegate {
             let response = try await api.uploadLocations(deviceId: deviceId, locations: pointsToUpload)
             uploadError = nil
             print("Uploaded \(response.received) points (batch: \(response.batchId))")
+            // Relay BLE peer positions to server on successful flush
+            if let deviceId = UserDefaults.standard.object(forKey: "selected_device_id") as? Int {
+                Task { await bluetooth.relayPeersToServer(relayDeviceId: deviceId) }
+            }
         } catch {
             // Put points back in buffer for retry
             buffer.insert(contentsOf: pointsToUpload, at: 0)

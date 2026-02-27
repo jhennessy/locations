@@ -18,8 +18,13 @@ def get_db():
         db.close()
 
 
+DEFAULT_THRESHOLDS = {
+    "position_ttl_seconds": "300",
+}
+
+
 def init_db():
     """Create all tables."""
-    from models import User, Device, Location, Place, Visit  # noqa: F401
+    from models import User, Device, Location, Place, Visit, Config, Session, CurrentPosition  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

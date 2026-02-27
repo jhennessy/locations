@@ -5,11 +5,11 @@ import uuid
 from functools import wraps
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from auth import create_token, decode_token, hash_password, verify_password
+from auth import create_token, decode_token, hash_password, verify_password, revoke_token
 from database import get_db
 from models import Device, Location, Place, User, Visit
 from processing import process_device_locations
@@ -111,7 +111,7 @@ def get_current_user(authorization: str = Header(...), db: Session = Depends(get
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
     token = authorization[7:]
-    payload = decode_token(token)
+    payload = decode_token(token, db)
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     user = db.query(User).filter(User.id == payload["sub"]).first()
@@ -136,7 +136,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-    token = create_token(user.id, user.username)
+    token = create_token(user.id, user.username, db)
     return TokenResponse(token=token, user_id=user.id, username=user.username)
 
 
@@ -145,8 +145,16 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username).first()
     if user is None or not verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_token(user.id, user.username)
+    token = create_token(user.id, user.username, db)
     return TokenResponse(token=token, user_id=user.id, username=user.username)
+
+
+@router.post("/logout")
+async def logout(request: Request, db: Session = Depends(get_db)):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if token:
+        revoke_token(token, db)
+    return {"message": "Logged out"}
 
 
 # ---------------------------------------------------------------------------
@@ -389,3 +397,148 @@ def update_place_name(
     place.name = body.get("name", place.name)
     db.commit()
     return {"id": place.id, "name": place.name}
+
+
+# ---------------------------------------------------------------------------
+# Position schemas
+# ---------------------------------------------------------------------------
+
+class PositionPoint(BaseModel):
+    latitude: float
+    longitude: float
+    altitude: float = None
+    accuracy: float = None
+    speed: float = None
+    timestamp: str
+
+
+class PositionBatch(BaseModel):
+    device_id: int
+    positions: list[PositionPoint]
+
+
+class RelayedPosition(BaseModel):
+    device_id: int
+    latitude: float
+    longitude: float
+    altitude: float = None
+    accuracy: float = None
+    speed: float = None
+    timestamp: str
+
+
+class RelayBatch(BaseModel):
+    relay_device_id: int
+    positions: list[RelayedPosition]
+
+
+# ---------------------------------------------------------------------------
+# Position endpoints
+# ---------------------------------------------------------------------------
+
+@router.post("/positions")
+async def update_positions(batch: PositionBatch, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from models import CurrentPosition, Device as DeviceModel
+    device = db.query(DeviceModel).filter(DeviceModel.id == batch.device_id, DeviceModel.user_id == user.id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    for pos in batch.positions:
+        ts = datetime.datetime.fromisoformat(pos.timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
+        existing = db.query(CurrentPosition).filter(CurrentPosition.device_id == batch.device_id).first()
+        if existing:
+            existing.latitude = pos.latitude
+            existing.longitude = pos.longitude
+            existing.altitude = pos.altitude
+            existing.accuracy = pos.accuracy
+            existing.speed = pos.speed
+            existing.timestamp = ts
+            existing.updated_at = datetime.datetime.utcnow()
+        else:
+            cp = CurrentPosition(
+                user_id=user.id,
+                device_id=batch.device_id,
+                latitude=pos.latitude,
+                longitude=pos.longitude,
+                altitude=pos.altitude,
+                accuracy=pos.accuracy,
+                speed=pos.speed,
+                timestamp=ts
+            )
+            db.add(cp)
+    db.commit()
+    return {"updated": len(batch.positions)}
+
+
+@router.get("/positions")
+async def get_all_positions(user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from models import CurrentPosition, Device as DeviceModel, User as UserModel, Config
+    ttl = 300
+    config = db.query(Config).filter(Config.key == "position_ttl_seconds").first()
+    if config:
+        ttl = int(config.value)
+
+    positions = db.query(CurrentPosition).all()
+    now = datetime.datetime.utcnow()
+    result = []
+    for p in positions:
+        device = db.query(DeviceModel).filter(DeviceModel.id == p.device_id).first()
+        pos_user = db.query(UserModel).filter(UserModel.id == p.user_id).first()
+        is_stale = (now - p.updated_at).total_seconds() > ttl if p.updated_at else True
+        result.append({
+            "device_id": p.device_id,
+            "device_name": device.name if device else None,
+            "user_id": p.user_id,
+            "username": pos_user.username if pos_user else None,
+            "latitude": p.latitude,
+            "longitude": p.longitude,
+            "altitude": p.altitude,
+            "accuracy": p.accuracy,
+            "speed": p.speed,
+            "timestamp": p.timestamp.isoformat() if p.timestamp else None,
+            "is_stale": is_stale
+        })
+    return result
+
+
+@router.post("/positions/relay")
+async def relay_positions(batch: RelayBatch, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from models import CurrentPosition, Device as DeviceModel
+    relay_device = db.query(DeviceModel).filter(DeviceModel.id == batch.relay_device_id, DeviceModel.user_id == user.id).first()
+    if not relay_device:
+        raise HTTPException(status_code=404, detail="Relay device not found")
+
+    updated = 0
+    for pos in batch.positions:
+        ts = datetime.datetime.fromisoformat(pos.timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
+        existing = db.query(CurrentPosition).filter(CurrentPosition.device_id == pos.device_id).first()
+        if existing:
+            if existing.timestamp and existing.timestamp >= ts:
+                continue
+            existing.latitude = pos.latitude
+            existing.longitude = pos.longitude
+            existing.altitude = pos.altitude
+            existing.accuracy = pos.accuracy
+            existing.speed = pos.speed
+            existing.timestamp = ts
+            existing.updated_at = datetime.datetime.utcnow()
+            existing.relayed_by_device_id = batch.relay_device_id
+        else:
+            device = db.query(DeviceModel).filter(DeviceModel.id == pos.device_id).first()
+            if not device:
+                continue
+            cp = CurrentPosition(
+                user_id=device.user_id,
+                device_id=pos.device_id,
+                latitude=pos.latitude,
+                longitude=pos.longitude,
+                altitude=pos.altitude,
+                accuracy=pos.accuracy,
+                speed=pos.speed,
+                timestamp=ts,
+                relayed_by_device_id=batch.relay_device_id
+            )
+            db.add(cp)
+        updated += 1
+    db.commit()
+    return {"relayed": updated}

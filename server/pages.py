@@ -16,7 +16,7 @@ def get_session_user() -> tuple[Session, User | None]:
     token = app.storage.user.get("token")
     if not token:
         return db, None
-    payload = decode_token(token)
+    payload = decode_token(token, db)
     if payload is None:
         return db, None
     user = db.query(User).filter(User.id == payload["sub"]).first()
@@ -72,7 +72,7 @@ def login_page():
         db = SessionLocal()
         user = db.query(User).filter(User.username == username.value).first()
         if user and verify_password(password.value, user.password_hash):
-            token = create_token(user.id, user.username)
+            token = create_token(user.id, user.username, db)
             app.storage.user["token"] = token
             app.storage.user["username"] = user.username
             ui.navigate.to("/")
@@ -120,7 +120,7 @@ def register_page():
         db.add(user)
         db.commit()
         db.refresh(user)
-        token = create_token(user.id, user.username)
+        token = create_token(user.id, user.username, db)
         app.storage.user["token"] = token
         app.storage.user["username"] = user.username
         db.close()

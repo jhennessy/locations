@@ -40,9 +40,9 @@ struct DeviceSelectionView: View {
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Logout") {
-                        api.logout()
                         locationService.stopTracking()
                         locationService.deviceId = nil
+                        Task { await api.logout() }
                     }
                 }
             }

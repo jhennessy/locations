@@ -24,6 +24,7 @@
 		8A1B2C3D4E5F60718293A4C9 /* Visit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4C9; };
 		8A1B2C3D4E5F60718293A4D0 /* Place.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D0; };
 		8A1B2C3D4E5F60718293A4D1 /* TestData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D1; };
+		8A1B2C3D4E5F60718293A4D4 /* BluetoothService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D5 /* BluetoothService.swift */; };
 		8A1B2C3D4E5F60718293A4E0 /* ModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4E0; };
 /* End PBXBuildFile section */
 
@@ -56,6 +57,7 @@
 		1A2B3C4D5E6F70819203A4D0 /* Place.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Place.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4D1 /* TestData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestData.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4D2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		1A2B3C4D5E6F70819203A4D5 /* BluetoothService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothService.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4E0 /* ModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTests.swift; sourceTree = "<group>"; };
 		9F0E1D2C3B4A59687706A5B4 /* LocationTracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LocationTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F0E1D2C3B4A59687706A5B5 /* LocationTrackerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocationTrackerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -141,6 +143,7 @@
 			isa = PBXGroup;
 			children = (
 				1A2B3C4D5E6F70819203A4C4 /* APIService.swift */,
+				1A2B3C4D5E6F70819203A4D5 /* BluetoothService.swift */,
 				1A2B3C4D5E6F70819203A4C5 /* LocationService.swift */,
 			);
 			path = Services;
@@ -261,6 +264,7 @@
 				8A1B2C3D4E5F60718293A4C9 /* Visit.swift in Sources */,
 				8A1B2C3D4E5F60718293A4D0 /* Place.swift in Sources */,
 				8A1B2C3D4E5F60718293A4D1 /* TestData.swift in Sources */,
+				8A1B2C3D4E5F60718293A4D4 /* BluetoothService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

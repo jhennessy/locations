@@ -8,9 +8,13 @@
 	<string>Location Tracker needs access to your location to record your position and send it to the server.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Location Tracker needs always-on location access to track your position in the background.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>LocationTracker uses Bluetooth to share position with nearby devices</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
 	</array>
 </dict>
 </plist>

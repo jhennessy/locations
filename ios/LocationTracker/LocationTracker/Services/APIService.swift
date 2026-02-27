@@ -109,7 +109,8 @@ class APIService: ObservableObject {
         self.currentUser = response
     }
 
-    func logout() {
+    func logout() async {
+        _ = try? await makeRequest(path: "/api/logout", method: "POST")
         self.token = nil
         self.currentUser = nil
     }
@@ -157,5 +158,76 @@ class APIService: ObservableObject {
     func fetchFrequentPlaces(limit: Int = 20) async throws -> [PlaceInfo] {
         let data = try await makeRequest(path: "/api/places/frequent?limit=\(limit)", method: "GET")
         return try JSONDecoder().decode([PlaceInfo].self, from: data)
+    }
+
+    // MARK: - Positions
+
+    struct PositionPointRequest: Codable {
+        let latitude: Double
+        let longitude: Double
+        let altitude: Double?
+        let accuracy: Double?
+        let speed: Double?
+        let timestamp: String
+    }
+
+    struct PositionBatchRequest: Codable {
+        let device_id: Int
+        let positions: [PositionPointRequest]
+    }
+
+    struct ServerPosition: Codable, Identifiable {
+        let device_id: Int
+        let device_name: String?
+        let user_id: Int
+        let username: String?
+        let latitude: Double
+        let longitude: Double
+        let altitude: Double?
+        let accuracy: Double?
+        let speed: Double?
+        let timestamp: String?
+        let is_stale: Bool
+
+        var id: Int { device_id }
+    }
+
+    struct ServerRelayPosition: Codable {
+        let device_id: Int
+        let latitude: Double
+        let longitude: Double
+        let altitude: Double?
+        let accuracy: Double?
+        let speed: Double?
+        let timestamp: String
+    }
+
+    struct RelayBatchRequest: Codable {
+        let relay_device_id: Int
+        let positions: [ServerRelayPosition]
+    }
+
+    func updatePosition(deviceId: Int, latitude: Double, longitude: Double, altitude: Double?, accuracy: Double?, speed: Double?, timestamp: Date) async {
+        let formatter = ISO8601DateFormatter()
+        let batch = PositionBatchRequest(device_id: deviceId, positions: [
+            PositionPointRequest(
+                latitude: latitude, longitude: longitude,
+                altitude: altitude, accuracy: accuracy, speed: speed,
+                timestamp: formatter.string(from: timestamp)
+            )
+        ])
+        let body = try? JSONEncoder().encode(batch)
+        _ = try? await makeRequest(path: "/api/positions", method: "POST", body: body)
+    }
+
+    func fetchAllPositions() async -> [ServerPosition] {
+        guard let data = try? await makeRequest(path: "/api/positions", method: "GET") else { return [] }
+        return (try? JSONDecoder().decode([ServerPosition].self, from: data)) ?? []
+    }
+
+    func relayPeerPositions(relayDeviceId: Int, positions: [ServerRelayPosition]) async {
+        let batch = RelayBatchRequest(relay_device_id: relayDeviceId, positions: positions)
+        let body = try? JSONEncoder().encode(batch)
+        _ = try? await makeRequest(path: "/api/positions/relay", method: "POST", body: body)
     }
 }
