@@ -124,6 +124,119 @@ DUPLICATE_TIME_POINT = {
     "horizontal_accuracy": 8.0, "speed": 0.0, "timestamp": _t(0, 1),  # 1 sec after first
 }
 
+# -- Points with varying transit speeds (for transit filter testing) --
+FAST_TRANSIT_POINTS = [
+    {"latitude": 37.7700, "longitude": -122.4100, "horizontal_accuracy": 5.0, "speed": 0.0, "timestamp": _t(0)},      # stationary - kept
+    {"latitude": 37.7710, "longitude": -122.4100, "horizontal_accuracy": 5.0, "speed": 5.0, "timestamp": _t(1)},      # cycling - removed
+    {"latitude": 37.7720, "longitude": -122.4100, "horizontal_accuracy": 5.0, "speed": 15.0, "timestamp": _t(2)},     # driving - removed
+    {"latitude": 37.7730, "longitude": -122.4100, "horizontal_accuracy": 5.0, "speed": None, "timestamp": _t(3)},     # unknown - kept
+    {"latitude": 37.7740, "longitude": -122.4100, "horizontal_accuracy": 5.0, "speed": -1, "timestamp": _t(4)},       # iOS unknown - kept
+    {"latitude": 37.7750, "longitude": -122.4100, "horizontal_accuracy": 5.0, "speed": 1.8, "timestamp": _t(5)},      # slow walk - kept
+    {"latitude": 37.7760, "longitude": -122.4100, "horizontal_accuracy": 5.0, "speed": 2.5, "timestamp": _t(6)},      # fast walk - removed
+]
+
+# ---------------------------------------------------------------------------
+# Sparse geofence data: simulates real iOS geofence-based tracking.
+#
+# Pattern at each location:
+# - Arrival: 3 GPS fix points over ~20s (fix acquisition + settling)
+# - State change "→ Sleeping": same coords, speed=None, timestamp = now
+# - GAP: no points while geofence is active (30-120 min)
+# - State change "Geofence exit": same coords, speed=None, timestamp = now
+# - Departure: GPS fix at the NEW location
+#
+# The state change points use the current time (Date()) as the timestamp,
+# not the stale CLLocation measurement time. This is the fix that makes
+# visit detection work with sparse geofence data.
+# ---------------------------------------------------------------------------
+
+_SPARSE_BASE = datetime.datetime(2024, 1, 15, 8, 0, 0)
+
+def _st(minutes, seconds=0):
+    return _SPARSE_BASE + datetime.timedelta(minutes=minutes, seconds=seconds)
+
+# Location A: Home — stay 60 minutes (08:00 - 09:00)
+SPARSE_HOME_ARRIVAL = [
+    # Fix acquisition points (3 points over 20s)
+    {"latitude": 37.76148, "longitude": -122.42405, "altitude": 22.3, "horizontal_accuracy": 35.0, "speed": None, "timestamp": _st(0, 0)},
+    {"latitude": 37.76153, "longitude": -122.42398, "altitude": 21.8, "horizontal_accuracy": 12.0, "speed": 0.2, "timestamp": _st(0, 10)},
+    {"latitude": 37.76150, "longitude": -122.42402, "altitude": 22.0, "horizontal_accuracy": 8.0, "speed": 0.0, "timestamp": _st(0, 20)},
+    # State change: "→ Sleeping" — uses Date(), coords from last fix
+    {"latitude": 37.76150, "longitude": -122.42402, "altitude": 22.0, "horizontal_accuracy": 8.0, "speed": None, "timestamp": _st(0, 25)},
+]
+
+SPARSE_HOME_DEPARTURE = [
+    # State change: "Geofence exit" — uses Date(), coords from stale lastLocation
+    {"latitude": 37.76150, "longitude": -122.42402, "altitude": 22.0, "horizontal_accuracy": 8.0, "speed": None, "timestamp": _st(60, 0)},
+    # State change: "→ Getting fix" — uses Date(), same stale coords
+    {"latitude": 37.76150, "longitude": -122.42402, "altitude": 22.0, "horizontal_accuracy": 8.0, "speed": None, "timestamp": _st(60, 1)},
+]
+
+# Walking to coffee shop (GPS fix at new location after geofence exit)
+SPARSE_WALK_TO_COFFEE = [
+    {"latitude": 37.76400, "longitude": -122.42100, "altitude": 25.0, "horizontal_accuracy": 10.0, "speed": 1.4, "timestamp": _st(60, 10)},
+    {"latitude": 37.76500, "longitude": -122.42000, "altitude": 25.5, "horizontal_accuracy": 8.0, "speed": 1.3, "timestamp": _st(60, 20)},
+]
+
+# Location B: Coffee shop — stay 30 minutes (09:01 - 09:31)
+SPARSE_COFFEE_ARRIVAL = [
+    {"latitude": 37.76552, "longitude": -122.41955, "altitude": 26.5, "horizontal_accuracy": 20.0, "speed": None, "timestamp": _st(61, 0)},
+    {"latitude": 37.76548, "longitude": -122.41950, "altitude": 26.0, "horizontal_accuracy": 14.0, "speed": 0.1, "timestamp": _st(61, 10)},
+    {"latitude": 37.76550, "longitude": -122.41952, "altitude": 26.2, "horizontal_accuracy": 10.0, "speed": 0.0, "timestamp": _st(61, 20)},
+    {"latitude": 37.76550, "longitude": -122.41952, "altitude": 26.2, "horizontal_accuracy": 10.0, "speed": None, "timestamp": _st(61, 25)},
+]
+
+SPARSE_COFFEE_DEPARTURE = [
+    {"latitude": 37.76550, "longitude": -122.41952, "altitude": 26.2, "horizontal_accuracy": 10.0, "speed": None, "timestamp": _st(91, 0)},
+    {"latitude": 37.76550, "longitude": -122.41952, "altitude": 26.2, "horizontal_accuracy": 10.0, "speed": None, "timestamp": _st(91, 1)},
+]
+
+# Walking to office
+SPARSE_WALK_TO_OFFICE = [
+    {"latitude": 37.76700, "longitude": -122.41800, "altitude": 28.0, "horizontal_accuracy": 8.0, "speed": 1.5, "timestamp": _st(91, 10)},
+]
+
+# Location C: Office — stay 120 minutes (09:32 - 11:32)
+SPARSE_OFFICE_ARRIVAL = [
+    {"latitude": 37.77382, "longitude": -122.41278, "altitude": 33.5, "horizontal_accuracy": 25.0, "speed": None, "timestamp": _st(92, 0)},
+    {"latitude": 37.77380, "longitude": -122.41280, "altitude": 33.3, "horizontal_accuracy": 15.0, "speed": 0.0, "timestamp": _st(92, 15)},
+    {"latitude": 37.77380, "longitude": -122.41280, "altitude": 33.3, "horizontal_accuracy": 15.0, "speed": None, "timestamp": _st(92, 20)},
+]
+
+SPARSE_OFFICE_DEPARTURE = [
+    {"latitude": 37.77380, "longitude": -122.41280, "altitude": 33.3, "horizontal_accuracy": 15.0, "speed": None, "timestamp": _st(212, 0)},
+    {"latitude": 37.77380, "longitude": -122.41280, "altitude": 33.3, "horizontal_accuracy": 15.0, "speed": None, "timestamp": _st(212, 1)},
+]
+
+# Full sparse trace: Home (60min) → walk → Coffee (30min) → walk → Office (120min)
+SPARSE_TRACE = (
+    SPARSE_HOME_ARRIVAL + SPARSE_HOME_DEPARTURE
+    + SPARSE_WALK_TO_COFFEE
+    + SPARSE_COFFEE_ARRIVAL + SPARSE_COFFEE_DEPARTURE
+    + SPARSE_WALK_TO_OFFICE
+    + SPARSE_OFFICE_ARRIVAL + SPARSE_OFFICE_DEPARTURE
+)
+
+# Trace WITHOUT the timestamp fix (state changes use stale CLLocation timestamps).
+# This demonstrates the bug: all state change points cluster at the arrival time.
+SPARSE_TRACE_STALE_TIMESTAMPS = (
+    SPARSE_HOME_ARRIVAL + [
+        # Geofence exit at 09:00, but timestamp is stale from arrival (08:00:20)
+        {"latitude": 37.76150, "longitude": -122.42402, "altitude": 22.0, "horizontal_accuracy": 8.0, "speed": None, "timestamp": _st(0, 20)},
+        {"latitude": 37.76150, "longitude": -122.42402, "altitude": 22.0, "horizontal_accuracy": 8.0, "speed": None, "timestamp": _st(0, 20)},
+    ]
+    + SPARSE_WALK_TO_COFFEE
+    + SPARSE_COFFEE_ARRIVAL + [
+        {"latitude": 37.76550, "longitude": -122.41952, "altitude": 26.2, "horizontal_accuracy": 10.0, "speed": None, "timestamp": _st(61, 20)},
+        {"latitude": 37.76550, "longitude": -122.41952, "altitude": 26.2, "horizontal_accuracy": 10.0, "speed": None, "timestamp": _st(61, 20)},
+    ]
+    + SPARSE_WALK_TO_OFFICE
+    + SPARSE_OFFICE_ARRIVAL + [
+        {"latitude": 37.77380, "longitude": -122.41280, "altitude": 33.3, "horizontal_accuracy": 15.0, "speed": None, "timestamp": _st(92, 15)},
+        {"latitude": 37.77380, "longitude": -122.41280, "altitude": 33.3, "horizontal_accuracy": 15.0, "speed": None, "timestamp": _st(92, 15)},
+    ]
+)
+
 # -- Segment metadata for validation --
 SEGMENTS = [
     {

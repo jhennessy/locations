@@ -7,6 +7,7 @@ import pytest
 
 from processing import (
     filter_gps_errors,
+    filter_transit_points,
     detect_visits,
     merge_nearby_visits,
     haversine_m,
@@ -29,7 +30,12 @@ from tests.gps_test_fixtures import (
     BAD_ACCURACY_POINT,
     BAD_SPEED_POINT,
     DUPLICATE_TIME_POINT,
+    FAST_TRANSIT_POINTS,
     SEGMENTS,
+    SPARSE_TRACE,
+    SPARSE_TRACE_STALE_TIMESTAMPS,
+    SPARSE_HOME_ARRIVAL,
+    SPARSE_HOME_DEPARTURE,
 )
 
 
@@ -319,3 +325,193 @@ class TestMergeNearbyVisits:
         visits = detect_visits(clean)
         merged = merge_nearby_visits(visits)
         assert len(merged) == len(visits)  # still 3
+
+
+# =====================================================================
+# Transit point filter tests
+# =====================================================================
+
+class TestFilterTransitPoints:
+    def test_keeps_stationary_points(self):
+        """Points with speed 0 or low speed are kept."""
+        result = filter_transit_points(HOME_SEGMENT)
+        assert len(result) == len(HOME_SEGMENT)
+
+    def test_removes_fast_transit(self):
+        """Points above max_visit_speed_ms are removed."""
+        result = filter_transit_points(FAST_TRANSIT_POINTS)
+        assert len(result) == 4  # speed 0.0, None, -1, 1.8
+
+    def test_keeps_none_speed(self):
+        pt = {"latitude": 37.77, "longitude": -122.41, "timestamp": datetime.datetime.now(), "speed": None}
+        result = filter_transit_points([pt])
+        assert len(result) == 1
+
+    def test_keeps_negative_speed(self):
+        pt = {"latitude": 37.77, "longitude": -122.41, "timestamp": datetime.datetime.now(), "speed": -1}
+        result = filter_transit_points([pt])
+        assert len(result) == 1
+
+    def test_respects_custom_threshold(self):
+        pts = [
+            {"latitude": 37.77, "longitude": -122.41, "timestamp": datetime.datetime.now(), "speed": 1.5},
+            {"latitude": 37.77, "longitude": -122.41, "timestamp": datetime.datetime.now(), "speed": 3.0},
+        ]
+        result = filter_transit_points(pts, {"max_visit_speed_ms": 1.0})
+        assert len(result) == 0
+
+    def test_empty_input(self):
+        assert filter_transit_points([]) == []
+
+
+# =====================================================================
+# Anchor-based detection tests
+# =====================================================================
+
+class TestAnchorDetection:
+    def test_centroid_does_not_drift(self):
+        """Points each <50m apart but spanning >200m total should NOT form a visit."""
+        base = datetime.datetime(2024, 1, 15, 10, 0, 0)
+        # 20 points, each ~33m apart along a line, 30s intervals = 10 min total
+        drifting_pts = [
+            {
+                "latitude": 37.7700 + i * 0.0003,
+                "longitude": -122.4100,
+                "timestamp": base + datetime.timedelta(seconds=i * 30),
+                "speed": 0.0,
+            }
+            for i in range(20)
+        ]
+        visits = detect_visits(drifting_pts)
+        # Anchor stays at first point; subsequent points quickly exceed 50m from it.
+        # No cluster should last >= 5 min.
+        assert len(visits) == 0
+
+
+# =====================================================================
+# Median centroid tests
+# =====================================================================
+
+class TestMedianCentroid:
+    def test_outlier_does_not_shift_centroid(self):
+        """A GPS outlier near the edge of the radius should not pull the centroid."""
+        base = datetime.datetime(2024, 1, 15, 10, 0, 0)
+        # 9 tightly clustered points + 1 outlier within radius
+        cluster_pts = [
+            {
+                "latitude": 37.7700 + (i % 3) * 0.00001,
+                "longitude": -122.4100 + (i % 3) * 0.00001,
+                "timestamp": base + datetime.timedelta(minutes=i),
+                "speed": 0.0,
+            }
+            for i in range(9)
+        ]
+        # Outlier ~44m away but still within 50m visit radius
+        cluster_pts.append({
+            "latitude": 37.7704,
+            "longitude": -122.4100,
+            "timestamp": base + datetime.timedelta(minutes=9),
+            "speed": 0.0,
+        })
+        visits = detect_visits(cluster_pts)
+        assert len(visits) == 1
+        # Median should be very close to 37.7700, not pulled toward 37.7704
+        assert abs(visits[0]["latitude"] - 37.7700) < 0.0002
+
+
+# =====================================================================
+# Sparse geofence data tests
+# =====================================================================
+
+class TestSparseGeofenceData:
+    """Tests that visit detection works with sparse geofence-based data.
+
+    Real iOS tracking produces very few points per location:
+    - 3-4 GPS fix points at arrival (~20s)
+    - State change points with current timestamps at departure
+    - No points during the stay (GPS off, geofence monitoring)
+    """
+
+    def test_detects_three_visits_from_sparse_trace(self):
+        """The fixed sparse trace (with correct timestamps) should detect 3 visits."""
+        clean = filter_gps_errors(SPARSE_TRACE)
+        stationary = filter_transit_points(clean)
+        visits = detect_visits(stationary)
+        assert len(visits) == 3
+
+    def test_stale_timestamps_miss_visits(self):
+        """Demonstrates the bug: stale timestamps produce clusters too short for visits."""
+        clean = filter_gps_errors(SPARSE_TRACE_STALE_TIMESTAMPS)
+        stationary = filter_transit_points(clean)
+        visits = detect_visits(stationary)
+        # With stale timestamps, clusters span ~25s each — all below 5 min threshold
+        assert len(visits) == 0
+
+    def test_sparse_home_visit_duration(self):
+        """Home visit should be ~60 minutes (arrival to geofence exit)."""
+        clean = filter_gps_errors(SPARSE_TRACE)
+        stationary = filter_transit_points(clean)
+        visits = detect_visits(stationary)
+        home_visit = visits[0]
+        # 60 min stay = 3600s, allow some tolerance from point timing
+        assert 3500 <= home_visit["duration_seconds"] <= 3610
+
+    def test_sparse_coffee_visit_duration(self):
+        """Coffee visit should be ~30 minutes.
+
+        A nearby walking point may anchor the cluster slightly early, so allow
+        tolerance up to ~31 min.
+        """
+        clean = filter_gps_errors(SPARSE_TRACE)
+        stationary = filter_transit_points(clean)
+        visits = detect_visits(stationary)
+        coffee_visit = visits[1]
+        assert 1700 <= coffee_visit["duration_seconds"] <= 1860
+
+    def test_sparse_office_visit_duration(self):
+        """Office visit should be ~120 minutes."""
+        clean = filter_gps_errors(SPARSE_TRACE)
+        stationary = filter_transit_points(clean)
+        visits = detect_visits(stationary)
+        office_visit = visits[2]
+        assert 7100 <= office_visit["duration_seconds"] <= 7210
+
+    def test_sparse_visit_locations_near_centers(self):
+        """Visit centroids should be near the actual locations."""
+        clean = filter_gps_errors(SPARSE_TRACE)
+        stationary = filter_transit_points(clean)
+        visits = detect_visits(stationary)
+
+        expected_centers = [HOME_CENTER, COFFEE_SHOP_CENTER, OFFICE_CENTER]
+        for visit, center in zip(visits, expected_centers):
+            dist = haversine_m(
+                visit["latitude"], visit["longitude"],
+                center["latitude"], center["longitude"],
+            )
+            assert dist < VISIT_RADIUS_M, (
+                f"Visit at ({visit['latitude']}, {visit['longitude']}) "
+                f"is {dist:.0f}m from expected center"
+            )
+
+    def test_sparse_walking_points_not_visits(self):
+        """Walking segments between locations should not produce visits."""
+        from tests.gps_test_fixtures import SPARSE_WALK_TO_COFFEE, SPARSE_WALK_TO_OFFICE
+        clean = filter_gps_errors(SPARSE_WALK_TO_COFFEE + SPARSE_WALK_TO_OFFICE)
+        stationary = filter_transit_points(clean)
+        visits = detect_visits(stationary)
+        assert len(visits) == 0
+
+    def test_sparse_state_change_points_survive_filters(self):
+        """State change points (speed=None) must pass both GPS error and transit filters.
+
+        The two departure points are 1s apart, so the min-interval dedup filter
+        drops one (MIN_POINT_INTERVAL_S=2). This is expected — one surviving
+        departure point is sufficient to bridge the temporal gap.
+        """
+        state_change_points = SPARSE_HOME_ARRIVAL[-1:] + SPARSE_HOME_DEPARTURE
+        clean = filter_gps_errors(state_change_points)
+        # Sleep point + 1 of 2 departure points (other deduped at 1s interval)
+        assert len(clean) == 2
+        # Both survive the transit filter (speed=None)
+        stationary = filter_transit_points(clean)
+        assert len(stationary) == 2

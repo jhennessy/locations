@@ -113,7 +113,11 @@ class APIService: ObservableObject {
         self.currentUser = response
     }
 
-    func logout() {
+    func logout() async {
+        // Revoke token on server (best-effort)
+        if token != nil {
+            _ = try? await makeRequest(path: "/api/logout", method: "POST")
+        }
         self.token = nil
         self.currentUser = nil
     }
@@ -161,5 +165,105 @@ class APIService: ObservableObject {
     func fetchFrequentPlaces(limit: Int = 20) async throws -> [PlaceInfo] {
         let data = try await makeRequest(path: "/api/places/frequent?limit=\(limit)", method: "GET")
         return try JSONDecoder().decode([PlaceInfo].self, from: data)
+    }
+
+    // MARK: - Positions (live sharing)
+
+    func updatePosition(deviceId: Int, latitude: Double, longitude: Double, altitude: Double?,
+                         accuracy: Double?, speed: Double?, timestamp: String) async throws {
+        let body = try JSONEncoder().encode(PositionBatchRequest(positions: [
+            PositionPointRequest(
+                deviceId: deviceId, latitude: latitude, longitude: longitude,
+                altitude: altitude, accuracy: accuracy, speed: speed, timestamp: timestamp
+            ),
+        ]))
+        _ = try await makeRequest(path: "/api/positions", method: "POST", body: body)
+    }
+
+    func fetchAllPositions() async throws -> [ServerPosition] {
+        let data = try await makeRequest(path: "/api/positions", method: "GET")
+        return try JSONDecoder().decode([ServerPosition].self, from: data)
+    }
+
+    func relayPeerPositions(relayDeviceId: Int, positions: [ServerRelayPosition]) async throws {
+        let body = try JSONEncoder().encode(RelayBatchRequest(
+            relayedByDeviceId: relayDeviceId,
+            positions: positions
+        ))
+        _ = try await makeRequest(path: "/api/positions/relay", method: "POST", body: body)
+    }
+}
+
+// MARK: - Position API models
+
+struct PositionPointRequest: Codable {
+    let deviceId: Int
+    let latitude: Double
+    let longitude: Double
+    let altitude: Double?
+    let accuracy: Double?
+    let speed: Double?
+    let timestamp: String
+
+    enum CodingKeys: String, CodingKey {
+        case deviceId = "device_id"
+        case latitude, longitude, altitude, accuracy, speed, timestamp
+    }
+}
+
+struct PositionBatchRequest: Codable {
+    let positions: [PositionPointRequest]
+}
+
+struct ServerPosition: Codable, Identifiable {
+    var id: Int { deviceId }
+    let userId: Int
+    let username: String
+    let deviceId: Int
+    let deviceName: String
+    let latitude: Double
+    let longitude: Double
+    let altitude: Double?
+    let accuracy: Double?
+    let speed: Double?
+    let timestamp: String
+    let updatedAt: String
+    let isStale: Bool
+    let relayedByDeviceId: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case username
+        case deviceId = "device_id"
+        case deviceName = "device_name"
+        case latitude, longitude, altitude, accuracy, speed, timestamp
+        case updatedAt = "updated_at"
+        case isStale = "is_stale"
+        case relayedByDeviceId = "relayed_by_device_id"
+    }
+}
+
+struct ServerRelayPosition: Codable {
+    let deviceId: Int
+    let latitude: Double
+    let longitude: Double
+    let altitude: Double?
+    let accuracy: Double?
+    let speed: Double?
+    let timestamp: String
+
+    enum CodingKeys: String, CodingKey {
+        case deviceId = "device_id"
+        case latitude, longitude, altitude, accuracy, speed, timestamp
+    }
+}
+
+struct RelayBatchRequest: Codable {
+    let relayedByDeviceId: Int
+    let positions: [ServerRelayPosition]
+
+    enum CodingKeys: String, CodingKey {
+        case relayedByDeviceId = "relayed_by_device_id"
+        case positions
     }
 }

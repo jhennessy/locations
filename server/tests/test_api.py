@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from database import Base, get_db as original_get_db
-from models import User, Device, Location, Place, Visit  # noqa: F401
+from models import User, Device, Location, Place, Visit, Session as SessionModel, CurrentPosition  # noqa: F401
 from auth import hash_password, create_token
 from tests.gps_test_fixtures import GPS_TRACE, HOME_SEGMENT
 
@@ -52,7 +52,7 @@ def app_and_db():
     session.add(user)
     session.commit()
     session.refresh(user)
-    token = create_token(user.id, user.username)
+    token = create_token(user.id, user.username, session)
     session.close()
 
     client = TestClient(app)
@@ -263,3 +263,183 @@ class TestVisitEndpoints:
     def test_visits_wrong_device(self, client, auth_headers):
         resp = client.get("/api/visits/9999", headers=auth_headers)
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Session / auth robustness tests
+# ---------------------------------------------------------------------------
+
+class TestSessionAuth:
+    def test_login_creates_db_session(self, app_and_db):
+        """Login stores a token in the sessions table."""
+        client, _, TestSession = app_and_db
+        resp = client.post("/api/login", json={"username": "testuser", "password": "testpass"})
+        assert resp.status_code == 200
+        token = resp.json()["token"]
+        # Verify the token exists in DB
+        session = TestSession()
+        row = session.query(SessionModel).filter(SessionModel.token == token).first()
+        assert row is not None
+        assert row.user_id is not None
+        session.close()
+
+    def test_logout_revokes_token(self, app_and_db):
+        """Logout deletes the session from DB so the token is no longer valid."""
+        client, token, TestSession = app_and_db
+        headers = {"Authorization": f"Bearer {token}"}
+        # Token works
+        resp = client.get("/api/devices", headers=headers)
+        assert resp.status_code == 200
+        # Logout
+        resp = client.post("/api/logout", headers=headers)
+        assert resp.status_code == 200
+        # Token no longer works
+        resp = client.get("/api/devices", headers=headers)
+        assert resp.status_code == 401
+
+    def test_register_returns_valid_token(self, client):
+        """Register returns a token that can be used immediately."""
+        resp = client.post("/api/register", json={
+            "username": "sessionuser",
+            "email": "session@example.com",
+            "password": "pass123",
+        })
+        token = resp.json()["token"]
+        resp = client.get("/api/devices", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+
+    def test_expired_token_rejected(self, app_and_db):
+        """Manually expire a session token and confirm it is rejected."""
+        client, _, TestSession = app_and_db
+        resp = client.post("/api/login", json={"username": "testuser", "password": "testpass"})
+        token = resp.json()["token"]
+        # Manually expire it
+        session = TestSession()
+        row = session.query(SessionModel).filter(SessionModel.token == token).first()
+        row.expires_at = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
+        session.commit()
+        session.close()
+        # Now it should be rejected
+        resp = client.get("/api/devices", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Position endpoint tests
+# ---------------------------------------------------------------------------
+
+class TestPositionEndpoints:
+    def _create_device(self, client, auth_headers, name="PosDevice", identifier="pos-001"):
+        resp = client.post("/api/devices", json={"name": name, "identifier": identifier}, headers=auth_headers)
+        return resp.json()["id"]
+
+    def test_upsert_position(self, client, auth_headers):
+        device_id = self._create_device(client, auth_headers)
+        ts = datetime.datetime.utcnow().isoformat()
+        resp = client.post("/api/positions", json={
+            "positions": [{"device_id": device_id, "latitude": 47.0, "longitude": 8.0, "timestamp": ts}],
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["upserted"] == 1
+
+        # Upsert again with new coords
+        ts2 = (datetime.datetime.utcnow() + datetime.timedelta(seconds=10)).isoformat()
+        resp = client.post("/api/positions", json={
+            "positions": [{"device_id": device_id, "latitude": 47.1, "longitude": 8.1, "timestamp": ts2}],
+        }, headers=auth_headers)
+        assert resp.json()["upserted"] == 1
+
+        # Get positions — should have exactly one entry for this device
+        resp = client.get("/api/positions", headers=auth_headers)
+        positions = resp.json()
+        matching = [p for p in positions if p["device_id"] == device_id]
+        assert len(matching) == 1
+        assert abs(matching[0]["latitude"] - 47.1) < 0.01
+
+    def test_get_all_positions_cross_user(self, app_and_db):
+        """All users can see all positions."""
+        client, token1, TestSession = app_and_db
+        headers1 = {"Authorization": f"Bearer {token1}"}
+
+        # Create second user
+        resp = client.post("/api/register", json={
+            "username": "user2", "email": "user2@example.com", "password": "pass2",
+        })
+        token2 = resp.json()["token"]
+        headers2 = {"Authorization": f"Bearer {token2}"}
+
+        # Each user creates a device and uploads position
+        d1 = client.post("/api/devices", json={"name": "D1", "identifier": "pos-u1"}, headers=headers1).json()["id"]
+        d2 = client.post("/api/devices", json={"name": "D2", "identifier": "pos-u2"}, headers=headers2).json()["id"]
+
+        ts = datetime.datetime.utcnow().isoformat()
+        client.post("/api/positions", json={
+            "positions": [{"device_id": d1, "latitude": 1.0, "longitude": 2.0, "timestamp": ts}],
+        }, headers=headers1)
+        client.post("/api/positions", json={
+            "positions": [{"device_id": d2, "latitude": 3.0, "longitude": 4.0, "timestamp": ts}],
+        }, headers=headers2)
+
+        # User1 should see both positions
+        resp = client.get("/api/positions", headers=headers1)
+        positions = resp.json()
+        device_ids = {p["device_id"] for p in positions}
+        assert d1 in device_ids
+        assert d2 in device_ids
+
+    def test_staleness_flag(self, app_and_db):
+        """Position older than TTL should be marked stale."""
+        client, token, TestSession = app_and_db
+        headers = {"Authorization": f"Bearer {token}"}
+
+        device_id = client.post("/api/devices", json={"name": "Stale", "identifier": "stale-001"}, headers=headers).json()["id"]
+        old_ts = (datetime.datetime.utcnow() - datetime.timedelta(seconds=600)).isoformat()
+        client.post("/api/positions", json={
+            "positions": [{"device_id": device_id, "latitude": 1.0, "longitude": 2.0, "timestamp": old_ts}],
+        }, headers=headers)
+
+        resp = client.get("/api/positions", headers=headers)
+        matching = [p for p in resp.json() if p["device_id"] == device_id]
+        assert len(matching) == 1
+        assert matching[0]["is_stale"] is True
+
+    def test_relay_dedup(self, app_and_db):
+        """Relay only updates position if timestamp is newer."""
+        client, token, TestSession = app_and_db
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # Create two devices for same user
+        d_target = client.post("/api/devices", json={"name": "Target", "identifier": "relay-target"}, headers=headers).json()["id"]
+        d_relay = client.post("/api/devices", json={"name": "Relay", "identifier": "relay-src"}, headers=headers).json()["id"]
+
+        # Upload direct position
+        ts1 = datetime.datetime.utcnow().isoformat()
+        client.post("/api/positions", json={
+            "positions": [{"device_id": d_target, "latitude": 10.0, "longitude": 20.0, "timestamp": ts1}],
+        }, headers=headers)
+
+        # Relay an OLDER timestamp — should be ignored
+        ts_old = (datetime.datetime.utcnow() - datetime.timedelta(seconds=60)).isoformat()
+        resp = client.post("/api/positions/relay", json={
+            "relayed_by_device_id": d_relay,
+            "positions": [{"device_id": d_target, "latitude": 99.0, "longitude": 99.0, "timestamp": ts_old}],
+        }, headers=headers)
+        assert resp.json()["relayed"] == 0
+
+        # Verify position unchanged
+        resp = client.get("/api/positions", headers=headers)
+        matching = [p for p in resp.json() if p["device_id"] == d_target]
+        assert abs(matching[0]["latitude"] - 10.0) < 0.01
+
+        # Relay a NEWER timestamp — should update
+        ts_new = (datetime.datetime.utcnow() + datetime.timedelta(seconds=60)).isoformat()
+        resp = client.post("/api/positions/relay", json={
+            "relayed_by_device_id": d_relay,
+            "positions": [{"device_id": d_target, "latitude": 50.0, "longitude": 60.0, "timestamp": ts_new}],
+        }, headers=headers)
+        assert resp.json()["relayed"] == 1
+
+        resp = client.get("/api/positions", headers=headers)
+        matching = [p for p in resp.json() if p["device_id"] == d_target]
+        assert abs(matching[0]["latitude"] - 50.0) < 0.01
+        assert matching[0]["relayed_by_device_id"] == d_relay

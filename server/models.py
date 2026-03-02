@@ -125,3 +125,39 @@ class ReprocessingJob(Base):
     places_created = Column(Integer, default=0)
 
     user = relationship("User")
+
+
+class Session(Base):
+    """Database-backed session token — survives server restarts."""
+
+    __tablename__ = "sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token = Column(String, unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    device_info = Column(String, nullable=True)
+
+    user = relationship("User")
+
+
+class CurrentPosition(Base):
+    """Live position for a device — upserted on each update, never historised."""
+
+    __tablename__ = "current_positions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    device_id = Column(Integer, ForeignKey("devices.id"), unique=True, nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    altitude = Column(Float, nullable=True)
+    accuracy = Column(Float, nullable=True)
+    speed = Column(Float, nullable=True)
+    timestamp = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    relayed_by_device_id = Column(Integer, ForeignKey("devices.id"), nullable=True)
+
+    user = relationship("User")
+    device = relationship("Device", foreign_keys=[device_id])

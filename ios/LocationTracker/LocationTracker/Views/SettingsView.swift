@@ -64,7 +64,7 @@ struct SettingsView: View {
                     Button("Logout", role: .destructive) {
                         locationService.stopTracking()
                         locationService.deviceId = nil
-                        api.logout()
+                        Task { await api.logout() }
                     }
                 }
 

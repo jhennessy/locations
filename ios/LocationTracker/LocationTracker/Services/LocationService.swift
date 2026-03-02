@@ -27,6 +27,7 @@ class LocationService: NSObject, ObservableObject {
 
     private let locationManager = CLLocationManager()
     private let api = APIService.shared
+    private let bluetooth = BluetoothService.shared
 
     /// Buffered location points waiting to be uploaded.
     @Published var buffer: [LocationPoint] = []
@@ -100,6 +101,7 @@ class LocationService: NSObject, ObservableObject {
 
     // Timer-free state tracking
     private var lastFlushTime: Date = Date()
+    private var lastPositionUploadTime: Date = Date.distantPast
     private var fixStartTime: Date?
 
     /// When the first acceptable (≤ goodFixAccuracy) fix arrived during gettingFix.
@@ -257,6 +259,9 @@ class LocationService: NSObject, ObservableObject {
         Log.location.notice("Starting tracking (buffer: \(self.buffer.count) points, background: \(self.isInBackground))")
         recordStateChange("Tracking started (bg: \(isInBackground))")
 
+        // Start BLE mesh
+        bluetooth.start()
+
         // Get a good fix first, then go to sleep with a geofence
         beginGettingFix(reason: "Tracking started")
     }
@@ -276,6 +281,9 @@ class LocationService: NSObject, ObservableObject {
 
         recordStateChange("Tracking stopped")
 
+        // Stop BLE mesh
+        bluetooth.stop()
+
         // Flush remaining buffer
         Task { await flushBuffer() }
     }
@@ -284,6 +292,7 @@ class LocationService: NSObject, ObservableObject {
 
     func handleBackgroundTransition() {
         isInBackground = true
+        bluetooth.setBackground(true)
         Log.lifecycle.notice("Background — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking), charging: \(self.isCharging)")
         if isTracking {
             recordStateChange("App → background (mode: \(trackingMode.rawValue), charging: \(isCharging))")
@@ -297,6 +306,7 @@ class LocationService: NSObject, ObservableObject {
 
     func handleForegroundTransition() {
         isInBackground = false
+        bluetooth.setBackground(false)
         Log.lifecycle.notice("Foreground — mode: \(self.trackingMode.rawValue), buffer: \(self.buffer.count), tracking: \(self.isTracking)")
         if isTracking {
             recordStateChange("App → foreground (mode: \(trackingMode.rawValue))")
@@ -423,7 +433,10 @@ class LocationService: NSObject, ObservableObject {
     private func recordStateChange(_ description: String) {
         guard let location = lastLocation ?? locationManager.location else { return }
 
-        let point = LocationPoint(from: location, notes: description)
+        // Use current time, not the CLLocation's (possibly stale) measurement time.
+        // This is critical for visit detection: geofence exit points must carry the
+        // departure time so the server-side pipeline sees the full duration of a stay.
+        let point = LocationPoint(from: location, notes: description, timestampOverride: Date())
         buffer.append(point)
     }
 
@@ -508,6 +521,43 @@ class LocationService: NSObject, ObservableObject {
             }
         }
 
+        // Update BLE position for peer sharing
+        if let location = locations.last, let deviceId = deviceId {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            bluetooth.currentPosition = BLEPosition(
+                uid: api.currentUser?.userId ?? 0,
+                un: api.currentUser?.username ?? "",
+                did: deviceId,
+                lat: location.coordinate.latitude,
+                lon: location.coordinate.longitude,
+                alt: location.altitude,
+                acc: location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil,
+                spd: location.speed >= 0 ? location.speed : nil,
+                ts: formatter.string(from: location.timestamp)
+            )
+        }
+
+        // Periodic position upload (every 15s, separate from batch upload)
+        let timeSincePositionUpload = Date().timeIntervalSince(lastPositionUploadTime)
+        if timeSincePositionUpload >= 15, let location = lastLocation, let deviceId = deviceId {
+            lastPositionUploadTime = Date()
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let ts = formatter.string(from: location.timestamp)
+            Task {
+                try? await api.updatePosition(
+                    deviceId: deviceId,
+                    latitude: location.coordinate.latitude,
+                    longitude: location.coordinate.longitude,
+                    altitude: location.altitude,
+                    accuracy: location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil,
+                    speed: location.speed >= 0 ? location.speed : nil,
+                    timestamp: ts
+                )
+            }
+        }
+
         // Flush: immediately when backgrounded (we only have ~10s), otherwise on thresholds
         let timeSinceFlush = Date().timeIntervalSince(lastFlushTime)
         if isInBackground || buffer.count >= batchSize || timeSinceFlush >= maxBufferAge {
@@ -556,6 +606,9 @@ class LocationService: NSObject, ObservableObject {
             uploadError = nil
             deleteBufferFile()
             Log.network.notice("Uploaded \(response.received) points (batch: \(response.batchId), visits: \(response.visitsDetected))")
+
+            // Relay BLE peer positions on successful flush
+            await bluetooth.relayPeersToServer(relayDeviceId: deviceId)
         } catch {
             // Put points back in buffer for retry
             buffer.insert(contentsOf: pointsToUpload, at: 0)

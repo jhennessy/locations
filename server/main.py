@@ -47,7 +47,7 @@ import pages  # noqa: F401, E402
 ui.run(
     title="Location Tracker",
     favicon="static/icon-512.png",
-    port=8080,
+    port=8380,
     storage_secret=os.environ.get("STORAGE_SECRET", "change-me-in-production"),
     show=False,
 )

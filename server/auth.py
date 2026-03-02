@@ -1,20 +1,23 @@
-"""Authentication utilities: password hashing, token creation/verification.
+"""Authentication utilities: password hashing, database-backed session tokens.
 
-Uses HMAC-SHA256 tokens (no external JWT dependency required).
+Tokens are random strings stored in the sessions table — they survive server
+restarts and SECRET_KEY changes.  Password hashing still uses PBKDF2-HMAC-SHA256.
 """
 
-import base64
 import datetime
 import hashlib
 import hmac
-import json
-import os
 import secrets
 from typing import Optional
 
-SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+from sqlalchemy.orm import Session as DBSession
+
 TOKEN_EXPIRE_HOURS = 72
 
+
+# ---------------------------------------------------------------------------
+# Password hashing (unchanged — self-contained, no secret key dependency)
+# ---------------------------------------------------------------------------
 
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
@@ -31,42 +34,61 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def _b64_encode(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+# ---------------------------------------------------------------------------
+# Database-backed session tokens
+# ---------------------------------------------------------------------------
+
+def create_token(user_id: int, username: str, db: DBSession, device_info: str | None = None) -> str:
+    """Create a random session token and persist it in the DB."""
+    from models import Session
+
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.datetime.utcnow() + datetime.timedelta(hours=TOKEN_EXPIRE_HOURS)
+    session = Session(
+        user_id=user_id,
+        token=token,
+        expires_at=expires_at,
+        device_info=device_info,
+    )
+    db.add(session)
+    db.commit()
+    return token
 
 
-def _b64_decode(s: str) -> bytes:
-    padding = 4 - len(s) % 4
-    if padding != 4:
-        s += "=" * padding
-    return base64.urlsafe_b64decode(s)
+def decode_token(token: str, db: DBSession) -> Optional[dict]:
+    """Look up token in the DB.  Returns ``{"sub": user_id, "username": ...}`` or *None*."""
+    from models import Session, User
 
-
-def create_token(user_id: int, username: str) -> str:
-    """Create an HMAC-SHA256 signed token."""
-    payload = {
-        "sub": user_id,
-        "username": username,
-        "exp": (datetime.datetime.utcnow() + datetime.timedelta(hours=TOKEN_EXPIRE_HOURS)).isoformat(),
-        "iat": datetime.datetime.utcnow().isoformat(),
-    }
-    payload_bytes = json.dumps(payload, separators=(",", ":")).encode()
-    payload_b64 = _b64_encode(payload_bytes)
-    sig = hmac.new(SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()
-    return f"{payload_b64}.{sig}"
-
-
-def decode_token(token: str) -> Optional[dict]:
-    """Verify and decode a token. Returns None if invalid or expired."""
-    try:
-        payload_b64, sig = token.split(".", 1)
-        expected_sig = hmac.new(SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected_sig):
-            return None
-        payload = json.loads(_b64_decode(payload_b64))
-        exp = datetime.datetime.fromisoformat(payload["exp"])
-        if datetime.datetime.utcnow() > exp:
-            return None
-        return payload
-    except Exception:
+    session = db.query(Session).filter(Session.token == token).first()
+    if session is None:
         return None
+    if datetime.datetime.utcnow() > session.expires_at:
+        db.delete(session)
+        db.commit()
+        return None
+    user = db.query(User).filter(User.id == session.user_id).first()
+    if user is None:
+        return None
+    return {"sub": user.id, "username": user.username}
+
+
+def revoke_token(token: str, db: DBSession) -> bool:
+    """Delete a session token (logout).  Returns True if the token existed."""
+    from models import Session
+
+    session = db.query(Session).filter(Session.token == token).first()
+    if session is None:
+        return False
+    db.delete(session)
+    db.commit()
+    return True
+
+
+def cleanup_expired_sessions(db: DBSession) -> int:
+    """Remove all expired sessions.  Returns the number deleted."""
+    from models import Session
+
+    now = datetime.datetime.utcnow()
+    count = db.query(Session).filter(Session.expires_at < now).delete()
+    db.commit()
+    return count

@@ -31,7 +31,7 @@ struct LocationPoint: Codable {
         self.notes = notes
     }
 
-    init(from clLocation: CLLocation, notes: String? = nil) {
+    init(from clLocation: CLLocation, notes: String? = nil, timestampOverride: Date? = nil) {
         self.latitude = clLocation.coordinate.latitude
         self.longitude = clLocation.coordinate.longitude
         self.altitude = clLocation.altitude
@@ -43,7 +43,7 @@ struct LocationPoint: Codable {
 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        self.timestamp = formatter.string(from: clLocation.timestamp)
+        self.timestamp = formatter.string(from: timestampOverride ?? clLocation.timestamp)
     }
 }
 

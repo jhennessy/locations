@@ -10,6 +10,7 @@ Processing pipeline (runs server-side after each batch upload):
 import datetime
 import logging
 import math
+import statistics
 import time
 from typing import Optional
 
@@ -29,12 +30,15 @@ MAX_HORIZONTAL_ACCURACY_M = 100.0  # discard points with accuracy worse than thi
 MAX_SPEED_MS = 85.0                # ~306 km/h; discard impossible speeds
 MIN_POINT_INTERVAL_S = 2           # deduplicate points closer than this in time
 
+# Transit filtering
+MAX_VISIT_SPEED_MS = 2.0          # ~7 km/h; filter moving points before visit detection
+
 # Visit detection
-VISIT_RADIUS_M = 50.0             # max radius for a stationary cluster
+VISIT_RADIUS_M = 100.0            # max radius for a stationary cluster
 MIN_VISIT_DURATION_S = 300        # 5 minutes
 
 # Place snapping
-PLACE_SNAP_RADIUS_M = 80.0       # snap to existing place within this distance
+PLACE_SNAP_RADIUS_M = 150.0      # snap to existing place within this distance
 
 # Visit merging
 VISIT_MERGE_GAP_S = 180          # merge consecutive visits at same place if gap <= 3 minutes
@@ -49,6 +53,7 @@ def get_thresholds(db: Session) -> dict:
         "max_horizontal_accuracy_m": MAX_HORIZONTAL_ACCURACY_M,
         "max_speed_ms": MAX_SPEED_MS,
         "min_point_interval_s": MIN_POINT_INTERVAL_S,
+        "max_visit_speed_ms": MAX_VISIT_SPEED_MS,
         "visit_radius_m": VISIT_RADIUS_M,
         "min_visit_duration_s": MIN_VISIT_DURATION_S,
         "place_snap_radius_m": PLACE_SNAP_RADIUS_M,
@@ -116,6 +121,29 @@ def filter_gps_errors(points: list[dict], thresholds: dict | None = None) -> lis
 
 
 # ---------------------------------------------------------------------------
+# Step 1b: Transit point filtering
+# ---------------------------------------------------------------------------
+
+def filter_transit_points(points: list[dict], thresholds: dict | None = None) -> list[dict]:
+    """Remove points where the device is clearly in transit.
+
+    Points with speed > max_visit_speed_ms are removed before visit detection
+    to prevent transit points from polluting stationary clusters.
+
+    Points with speed=None or speed<=0 (iOS uses -1 for unknown) are kept.
+    """
+    if not points:
+        return []
+
+    max_visit_speed = (thresholds or {}).get("max_visit_speed_ms", MAX_VISIT_SPEED_MS)
+
+    return [
+        pt for pt in points
+        if pt.get("speed") is None or pt["speed"] <= max_visit_speed
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Step 2: Visit detection
 # ---------------------------------------------------------------------------
 
@@ -124,10 +152,10 @@ def detect_visits(points: list[dict], thresholds: dict | None = None) -> list[di
 
     Algorithm:
     - Walk through points chronologically.
-    - Maintain a current cluster (centroid + members).
-    - If next point is within visit_radius_m of centroid, add it.
-    - Otherwise, check if current cluster duration >= min_visit_duration_s;
-      if yes, emit as a visit. Start a new cluster from the current point.
+    - Maintain a current cluster with a fixed anchor (first point).
+    - If next point is within visit_radius_m of the anchor, add it.
+    - Otherwise, finalize the cluster (emit if duration >= min_visit_duration_s).
+    - The visit's reported location is the median of all cluster points.
     """
     if len(points) < 2:
         return []
@@ -135,39 +163,37 @@ def detect_visits(points: list[dict], thresholds: dict | None = None) -> list[di
     visit_radius = (thresholds or {}).get("visit_radius_m", VISIT_RADIUS_M)
     min_duration = (thresholds or {}).get("min_visit_duration_s", MIN_VISIT_DURATION_S)
 
-    visits = []
+    visits: list[dict] = []
     cluster: list[dict] = [points[0]]
-    cx, cy = points[0]["latitude"], points[0]["longitude"]
+    anchor_lat, anchor_lon = points[0]["latitude"], points[0]["longitude"]
 
     for pt in points[1:]:
-        dist = haversine_m(cx, cy, pt["latitude"], pt["longitude"])
+        dist = haversine_m(anchor_lat, anchor_lon, pt["latitude"], pt["longitude"])
 
         if dist <= visit_radius:
             cluster.append(pt)
-            # Update centroid as running mean
-            n = len(cluster)
-            cx = cx + (pt["latitude"] - cx) / n
-            cy = cy + (pt["longitude"] - cy) / n
         else:
             # Finalize cluster if it qualifies as a visit
-            _maybe_emit_visit(cluster, cx, cy, visits, min_duration)
-            # Start new cluster
+            _maybe_emit_visit(cluster, visits, min_duration)
+            # Start new cluster with this point as the anchor
             cluster = [pt]
-            cx, cy = pt["latitude"], pt["longitude"]
+            anchor_lat, anchor_lon = pt["latitude"], pt["longitude"]
 
     # Don't forget the last cluster
-    _maybe_emit_visit(cluster, cx, cy, visits, min_duration)
+    _maybe_emit_visit(cluster, visits, min_duration)
 
     return visits
 
 
 def _maybe_emit_visit(
     cluster: list[dict],
-    centroid_lat: float,
-    centroid_lon: float,
     visits: list[dict],
     min_duration: float = MIN_VISIT_DURATION_S,
 ):
+    """Emit a visit if the cluster meets minimum duration.
+
+    The visit location is the median lat/lon — more robust to GPS outliers than the mean.
+    """
     if len(cluster) < 2:
         return
     arrival = cluster[0]["timestamp"]
@@ -175,8 +201,8 @@ def _maybe_emit_visit(
     duration = (departure - arrival).total_seconds()
     if duration >= min_duration:
         visits.append({
-            "latitude": centroid_lat,
-            "longitude": centroid_lon,
+            "latitude": statistics.median(pt["latitude"] for pt in cluster),
+            "longitude": statistics.median(pt["longitude"] for pt in cluster),
             "arrival": arrival,
             "departure": departure,
             "duration_seconds": int(duration),
@@ -361,13 +387,18 @@ def _process_locations_since(
         for loc in raw_locations
     ]
 
-    # Step 1: Filter
+    # Step 1: Filter GPS errors
     clean_points = filter_gps_errors(points, thresholds)
     if not clean_points:
         return []
 
+    # Step 1b: Remove transit points
+    stationary_points = filter_transit_points(clean_points, thresholds)
+    if not stationary_points:
+        return []
+
     # Step 2: Detect visits
-    raw_visits = detect_visits(clean_points, thresholds)
+    raw_visits = detect_visits(stationary_points, thresholds)
     if not raw_visits:
         return []
 

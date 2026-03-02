@@ -5,8 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.location.Location
+import android.os.BatteryManager
 import android.os.Binder
 import android.os.IBinder
 import android.os.Looper
@@ -26,6 +30,14 @@ import java.text.SimpleDateFormat
 import java.util.*
 import javax.inject.Inject
 
+/**
+ * Foreground location service using a geofence-based state machine matching iOS:
+ *
+ *  - **GettingFix**: High-accuracy GPS at 1s. Excellent fix (<=15m) transitions immediately;
+ *    good fix (<=50m) starts a 15s settling window; 30s hard timeout.
+ *  - **Sleeping**: GPS off, geofence at max(20m, accuracy*1.5, speed*10). Wakes on exit.
+ *  - **Continuous**: 10m distance filter, 5s interval — only when charging.
+ */
 @AndroidEntryPoint
 class LocationTrackingService : Service() {
 
@@ -34,26 +46,26 @@ class LocationTrackingService : Service() {
         const val NOTIFICATION_CHANNEL_ID = "location_tracking"
         const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "stop_tracking"
-        const val EXTRA_ACTIVITY_TYPE = "activity_type"
-        const val EXTRA_TRANSITION_TYPE = "transition_type"
+        const val ACTION_GEOFENCE_EXIT = "geofence_exit"
 
-        private const val MOVING_INTERVAL_MS = 5000L
-        private const val MOVING_FASTEST_INTERVAL_MS = 3000L
-        private const val MOVING_MIN_DISTANCE_M = 10f
-        private const val GETTING_FIX_INTERVAL_MS = 2000L
-        private const val STATIONARY_CHECK_INTERVAL_MS = 60000L
+        private const val GETTING_FIX_INTERVAL_MS = 1000L
+        private const val CONTINUOUS_INTERVAL_MS = 5000L
+        private const val CONTINUOUS_MIN_DISTANCE_M = 10f
         private const val GOOD_FIX_ACCURACY_M = 50f
+        private const val EXCELLENT_FIX_ACCURACY_M = 15f
         private const val MAX_FIX_WAIT_MS = 30000L
-        private const val STATIONARY_DELAY_MS = 120000L
+        private const val SETTLING_DURATION_MS = 15000L
+        private const val GEOFENCE_REQUEST_ID = "ch.codelook.locationz.geofence"
         private const val MIN_BUFFER_INTERVAL_MS = 3000L
         private const val MIN_BUFFER_DISTANCE_M = 5f
     }
 
     @Inject lateinit var preferencesManager: PreferencesManager
     @Inject lateinit var locationRepository: LocationRepository
+    @Inject lateinit var bufferManager: BufferManager
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private lateinit var activityRecognitionClient: ActivityRecognitionClient
+    private lateinit var geofencingClient: GeofencingClient
 
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -61,13 +73,16 @@ class LocationTrackingService : Service() {
     private var locationCallback: LocationCallback? = null
     private var flushTimer: Job? = null
     private var fixTimeoutJob: Job? = null
-    private var stationaryDelayJob: Job? = null
     private var started = false
+
+    // Settling state
+    private var settlingStartTime: Long = 0L
+    private var bestSettlingAccuracy: Float = Float.MAX_VALUE
 
     enum class TrackingMode(val displayName: String) {
         GETTING_FIX("Getting Fix"),
-        STATIONARY("Stationary"),
-        MOVING("Moving")
+        SLEEPING("Sleeping"),
+        CONTINUOUS("Continuous")
     }
 
     // Observable state
@@ -76,9 +91,6 @@ class LocationTrackingService : Service() {
 
     private val _currentLocation = MutableStateFlow<Location?>(null)
     val currentLocation: StateFlow<Location?> = _currentLocation
-
-    private val _motionActivity = MutableStateFlow("Unknown")
-    val motionActivity: StateFlow<String> = _motionActivity
 
     private val _bufferCount = MutableStateFlow(0)
     val bufferCount: StateFlow<Int> = _bufferCount
@@ -89,10 +101,32 @@ class LocationTrackingService : Service() {
     private val _isTracking = MutableStateFlow(false)
     val isTracking: StateFlow<Boolean> = _isTracking
 
-    private val buffer = mutableListOf<LocationPoint>()
-    private var lastMotionDetectedTime = 0L
+    private val _isCharging = MutableStateFlow(false)
+    val isCharging: StateFlow<Boolean> = _isCharging
+
+    private val _lastFixAccuracy = MutableStateFlow(50.0)
+    val lastFixAccuracy: StateFlow<Double> = _lastFixAccuracy
+
+    private val _lastSpeed = MutableStateFlow(0.0)
+    val lastSpeed: StateFlow<Double> = _lastSpeed
+
+    private val _geofenceRadius = MutableStateFlow(20.0)
+    val geofenceRadius: StateFlow<Double> = _geofenceRadius
+
     private var lastBufferedLocation: Location? = null
     private var lastBufferedTime = 0L
+    private var lastFlushTime = System.currentTimeMillis()
+
+    // Charging detection
+    private val chargingReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val wasCharging = _isCharging.value
+            _isCharging.value = isDeviceCharging()
+            if (wasCharging != _isCharging.value) {
+                if (_isCharging.value) handlePluggedIn() else handleUnplugged()
+            }
+        }
+    }
 
     inner class LocalBinder : Binder() {
         fun getService(): LocationTrackingService = this@LocationTrackingService
@@ -103,33 +137,41 @@ class LocationTrackingService : Service() {
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-        activityRecognitionClient = ActivityRecognition.getClient(this)
+        geofencingClient = LocationServices.getGeofencingClient(this)
         createNotificationChannel()
+
+        _isCharging.value = isDeviceCharging()
+
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        }
+        registerReceiver(chargingReceiver, filter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopTracking()
-            return START_NOT_STICKY
-        }
-
-        // Handle activity transition forwarded from receiver
-        if (intent?.hasExtra(EXTRA_ACTIVITY_TYPE) == true) {
-            val activityType = intent.getIntExtra(EXTRA_ACTIVITY_TYPE, -1)
-            val transitionType = intent.getIntExtra(EXTRA_TRANSITION_TYPE, -1)
-            if (activityType >= 0) {
-                handleActivityTransition(activityType, transitionType)
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopTracking()
+                return START_NOT_STICKY
             }
-            return START_STICKY
+            ACTION_GEOFENCE_EXIT -> {
+                if (_isTracking.value) {
+                    Log.d(TAG, "Geofence exit → getting fix")
+                    recordStateChange("Geofence exit")
+                    beginGettingFix("Geofence exit")
+                }
+                return START_STICKY
+            }
         }
 
-        // Only start tracking once
         if (!started) {
             started = true
             startForeground(NOTIFICATION_ID, createNotification("Starting..."))
             _isTracking.value = true
+            preferencesManager.trackingEnabled = true
+            _bufferCount.value = bufferManager.size
             beginGettingFix("Service started")
-            startActivityRecognition()
             startFlushTimer()
         }
 
@@ -137,6 +179,7 @@ class LocationTrackingService : Service() {
     }
 
     override fun onDestroy() {
+        try { unregisterReceiver(chargingReceiver) } catch (_: Exception) {}
         stopTracking()
         serviceScope.cancel()
         super.onDestroy()
@@ -144,14 +187,15 @@ class LocationTrackingService : Service() {
 
     fun stopTracking() {
         _isTracking.value = false
+        preferencesManager.trackingEnabled = false
         started = false
         stopLocationUpdates()
-        stopActivityRecognition()
+        removeGeofence()
         flushTimer?.cancel()
         fixTimeoutJob?.cancel()
-        stationaryDelayJob?.cancel()
 
-        if (buffer.isNotEmpty()) {
+        bufferManager.saveToDisk()
+        if (bufferManager.size > 0) {
             serviceScope.launch { flushBuffer() }
         }
 
@@ -163,15 +207,45 @@ class LocationTrackingService : Service() {
         serviceScope.launch { flushBuffer() }
     }
 
+    // --- Charging ---
+
+    private fun isDeviceCharging(): Boolean {
+        val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
+        return bm.isCharging
+    }
+
+    private fun handlePluggedIn() {
+        if (!_isTracking.value) return
+        Log.d(TAG, "Charger connected")
+        recordStateChange("Charger connected")
+        when (_trackingMode.value) {
+            TrackingMode.SLEEPING -> startContinuousMode("Charger connected")
+            TrackingMode.GETTING_FIX -> {} // will route to continuous after fix
+            TrackingMode.CONTINUOUS -> {}
+        }
+    }
+
+    private fun handleUnplugged() {
+        if (!_isTracking.value) return
+        Log.d(TAG, "Charger disconnected")
+        recordStateChange("Charger disconnected")
+        if (_trackingMode.value == TrackingMode.CONTINUOUS) {
+            beginGettingFix("Charger disconnected")
+        }
+    }
+
     // --- Tracking mode transitions ---
 
     private fun beginGettingFix(reason: String) {
-        Log.d(TAG, "Getting fix: $reason")
+        Log.d(TAG, "→ Getting fix: $reason")
         _trackingMode.value = TrackingMode.GETTING_FIX
-        recordStateChange("Getting fix: $reason")
+        settlingStartTime = 0L
+        bestSettlingAccuracy = Float.MAX_VALUE
+        recordStateChange("→ Getting fix: $reason")
         updateNotification("Getting GPS fix...")
 
         stopLocationUpdates()
+        removeGeofence()
         fixTimeoutJob?.cancel()
 
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, GETTING_FIX_INTERVAL_MS)
@@ -180,59 +254,147 @@ class LocationTrackingService : Service() {
 
         startLocationUpdates(request) { location ->
             _currentLocation.value = location
-            if (location.accuracy <= GOOD_FIX_ACCURACY_M) {
-                completeStationaryTransition(location.accuracy)
+            _lastSpeed.value = if (location.hasSpeed()) location.speed.toDouble() else 0.0
+            maybeBufferLocation(location)
+
+            if (_trackingMode.value != TrackingMode.GETTING_FIX) return@startLocationUpdates
+
+            val accuracy = location.accuracy
+
+            if (accuracy <= EXCELLENT_FIX_ACCURACY_M) {
+                Log.d(TAG, "Excellent fix: ${accuracy}m — skipping settling")
+                if (_isCharging.value) {
+                    startContinuousMode("Excellent fix while charging")
+                } else {
+                    completeSleepTransition(accuracy.toDouble(), "${accuracy.toInt()}m excellent")
+                }
+            } else if (accuracy <= GOOD_FIX_ACCURACY_M) {
+                if (settlingStartTime == 0L) {
+                    settlingStartTime = System.currentTimeMillis()
+                    bestSettlingAccuracy = accuracy
+                    Log.d(TAG, "Settling started: ${accuracy}m")
+                } else if (accuracy < bestSettlingAccuracy) {
+                    bestSettlingAccuracy = accuracy
+                }
+
+                val elapsed = System.currentTimeMillis() - settlingStartTime
+                if (elapsed >= SETTLING_DURATION_MS) {
+                    Log.d(TAG, "Settling complete: ${bestSettlingAccuracy}m")
+                    if (_isCharging.value) {
+                        startContinuousMode("Settled fix while charging")
+                    } else {
+                        completeSleepTransition(
+                            bestSettlingAccuracy.toDouble(),
+                            "${bestSettlingAccuracy.toInt()}m settled"
+                        )
+                    }
+                }
             }
         }
 
         fixTimeoutJob = serviceScope.launch {
             delay(MAX_FIX_WAIT_MS)
             if (_trackingMode.value == TrackingMode.GETTING_FIX) {
-                val acc = _currentLocation.value?.accuracy ?: Float.MAX_VALUE
-                completeStationaryTransition(acc)
+                val fallback = if (bestSettlingAccuracy < Float.MAX_VALUE) bestSettlingAccuracy.toDouble()
+                    else _currentLocation.value?.accuracy?.toDouble() ?: 50.0
+                Log.d(TAG, "Fix timeout, using ${fallback}m")
+                if (_isCharging.value) {
+                    startContinuousMode("Fix timeout while charging")
+                } else {
+                    completeSleepTransition(fallback, "timeout")
+                }
             }
         }
     }
 
-    private fun completeStationaryTransition(accuracy: Float) {
-        Log.d(TAG, "Transitioning to stationary (accuracy: ${accuracy}m)")
+    private fun completeSleepTransition(accuracy: Double, label: String) {
         fixTimeoutJob?.cancel()
-        _trackingMode.value = TrackingMode.STATIONARY
-        recordStateChange("Stationary (fix accuracy: ${accuracy.toInt()}m)")
-        updateNotification("Stationary")
+        settlingStartTime = 0L
+        bestSettlingAccuracy = Float.MAX_VALUE
+        _lastFixAccuracy.value = accuracy
+
+        _trackingMode.value = TrackingMode.SLEEPING
+        stopLocationUpdates()
+
+        val radius = computeGeofenceRadius()
+        _geofenceRadius.value = radius
+        setupGeofence(radius)
+
+        Log.d(TAG, "→ Sleeping ($label). Geofence r=${radius.toInt()}m")
+        recordStateChange("→ Sleeping ($label)")
+        updateNotification("Sleeping (fence: ${radius.toInt()}m)")
+
+        bufferManager.saveToDisk()
+    }
+
+    private fun startContinuousMode(reason: String) {
+        fixTimeoutJob?.cancel()
+        settlingStartTime = 0L
+        bestSettlingAccuracy = Float.MAX_VALUE
+
+        _trackingMode.value = TrackingMode.CONTINUOUS
+        removeGeofence()
 
         stopLocationUpdates()
 
-        // Low-power location monitoring
-        val request = LocationRequest.Builder(Priority.PRIORITY_LOW_POWER, STATIONARY_CHECK_INTERVAL_MS)
-            .setMinUpdateIntervalMillis(STATIONARY_CHECK_INTERVAL_MS)
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, CONTINUOUS_INTERVAL_MS)
+            .setMinUpdateDistanceMeters(CONTINUOUS_MIN_DISTANCE_M)
             .build()
 
         startLocationUpdates(request) { location ->
             _currentLocation.value = location
+            _lastSpeed.value = if (location.hasSpeed()) location.speed.toDouble() else 0.0
+            maybeBufferLocation(location)
+        }
+
+        Log.d(TAG, "→ Continuous: $reason")
+        recordStateChange("→ Continuous: $reason")
+        updateNotification("Continuous (10m filter)")
+    }
+
+    private fun computeGeofenceRadius(): Double {
+        val acc = _lastFixAccuracy.value
+        val spd = _lastSpeed.value
+        return maxOf(20.0, acc * 1.5, spd * 10.0)
+    }
+
+    // --- Geofence ---
+
+    @Suppress("MissingPermission")
+    private fun setupGeofence(radius: Double) {
+        val location = _currentLocation.value ?: return
+        removeGeofence()
+
+        val geofence = Geofence.Builder()
+            .setRequestId(GEOFENCE_REQUEST_ID)
+            .setCircularRegion(location.latitude, location.longitude, radius.toFloat())
+            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_EXIT)
+            .setExpirationDuration(Geofence.NEVER_EXPIRE)
+            .build()
+
+        val request = GeofencingRequest.Builder()
+            .setInitialTrigger(0)
+            .addGeofence(geofence)
+            .build()
+
+        val intent = Intent(this, GeofenceBroadcastReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        )
+
+        try {
+            geofencingClient.addGeofences(request, pendingIntent)
+            Log.d(TAG, "Geofence set: ${location.latitude},${location.longitude} r=${radius.toInt()}m")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Geofence permission denied", e)
         }
     }
 
-    private fun switchToMoving(reason: String) {
-        if (_trackingMode.value == TrackingMode.MOVING) return
-        Log.d(TAG, "Moving: $reason")
-        fixTimeoutJob?.cancel()
-        stationaryDelayJob?.cancel()
-        _trackingMode.value = TrackingMode.MOVING
-        recordStateChange("Moving: $reason")
-        updateNotification("Moving")
-
-        stopLocationUpdates()
-
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, MOVING_INTERVAL_MS)
-            .setMinUpdateIntervalMillis(MOVING_FASTEST_INTERVAL_MS)
-            .setMinUpdateDistanceMeters(MOVING_MIN_DISTANCE_M)
-            .build()
-
-        startLocationUpdates(request) { location ->
-            _currentLocation.value = location
-            maybeBufferLocation(location)
-        }
+    private fun removeGeofence() {
+        try {
+            geofencingClient.removeGeofences(listOf(GEOFENCE_REQUEST_ID))
+        } catch (_: Exception) {}
     }
 
     // --- Location updates ---
@@ -261,91 +423,6 @@ class LocationTrackingService : Service() {
         }
     }
 
-    // --- Activity Recognition ---
-
-    @Suppress("MissingPermission")
-    private fun startActivityRecognition() {
-        val transitions = listOf(
-            DetectedActivity.WALKING,
-            DetectedActivity.RUNNING,
-            DetectedActivity.ON_BICYCLE,
-            DetectedActivity.IN_VEHICLE,
-            DetectedActivity.STILL
-        ).flatMap { activityType ->
-            listOf(
-                ActivityTransition.Builder()
-                    .setActivityType(activityType)
-                    .setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER)
-                    .build()
-            )
-        }
-
-        val request = ActivityTransitionRequest(transitions)
-
-        val intent = Intent(this, ActivityRecognitionReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-        )
-
-        try {
-            activityRecognitionClient.requestActivityTransitionUpdates(request, pendingIntent)
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Activity recognition permission denied", e)
-        }
-    }
-
-    private fun stopActivityRecognition() {
-        val intent = Intent(this, ActivityRecognitionReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-        )
-        try {
-            activityRecognitionClient.removeActivityTransitionUpdates(pendingIntent)
-        } catch (_: Exception) {}
-    }
-
-    fun handleActivityTransition(activityType: Int, transitionType: Int) {
-        if (transitionType != ActivityTransition.ACTIVITY_TRANSITION_ENTER) return
-
-        val activityName = when (activityType) {
-            DetectedActivity.WALKING -> "Walking"
-            DetectedActivity.RUNNING -> "Running"
-            DetectedActivity.ON_BICYCLE -> "Cycling"
-            DetectedActivity.IN_VEHICLE -> "Driving"
-            DetectedActivity.STILL -> "Still"
-            else -> "Unknown"
-        }
-
-        _motionActivity.value = activityName
-
-        val isMoving = activityType in listOf(
-            DetectedActivity.WALKING,
-            DetectedActivity.RUNNING,
-            DetectedActivity.ON_BICYCLE,
-            DetectedActivity.IN_VEHICLE
-        )
-
-        if (isMoving) {
-            lastMotionDetectedTime = System.currentTimeMillis()
-            if (_trackingMode.value != TrackingMode.MOVING) {
-                stationaryDelayJob?.cancel()
-                switchToMoving(activityName.lowercase())
-            }
-        } else if (activityType == DetectedActivity.STILL) {
-            if (_trackingMode.value == TrackingMode.MOVING) {
-                stationaryDelayJob?.cancel()
-                stationaryDelayJob = serviceScope.launch {
-                    delay(STATIONARY_DELAY_MS)
-                    if (_trackingMode.value == TrackingMode.MOVING) {
-                        beginGettingFix("No motion for ${STATIONARY_DELAY_MS / 1000}s")
-                    }
-                }
-            }
-        }
-    }
-
     // --- Buffer management ---
 
     private fun maybeBufferLocation(location: Location) {
@@ -353,12 +430,9 @@ class LocationTrackingService : Service() {
         val last = lastBufferedLocation
         val timeSinceLast = now - lastBufferedTime
 
-        // Skip if too soon and too close to last buffered point
         if (last != null && timeSinceLast < MIN_BUFFER_INTERVAL_MS) {
             val distance = location.distanceTo(last)
-            if (distance < MIN_BUFFER_DISTANCE_M) {
-                return
-            }
+            if (distance < MIN_BUFFER_DISTANCE_M) return
         }
 
         lastBufferedLocation = location
@@ -383,12 +457,16 @@ class LocationTrackingService : Service() {
             notes = notes
         )
 
-        synchronized(buffer) {
-            buffer.add(point)
-            _bufferCount.value = buffer.size
-        }
+        bufferManager.add(point)
+        _bufferCount.value = bufferManager.size
 
-        if (buffer.size >= preferencesManager.batchSize) {
+        // Check flush thresholds
+        val batchSize = if (preferencesManager.aggressiveUpload) 1 else preferencesManager.batchSize
+        val maxAge = if (preferencesManager.aggressiveUpload) 30000L else preferencesManager.maxBufferAgeSec * 1000L
+        val timeSinceFlush = System.currentTimeMillis() - lastFlushTime
+
+        if (bufferManager.size >= batchSize || timeSinceFlush >= maxAge) {
+            lastFlushTime = System.currentTimeMillis()
             serviceScope.launch { flushBuffer() }
         }
     }
@@ -399,13 +477,9 @@ class LocationTrackingService : Service() {
     }
 
     private suspend fun flushBuffer() {
-        val pointsToSend: List<LocationPoint>
-        synchronized(buffer) {
-            if (buffer.isEmpty()) return
-            pointsToSend = buffer.toList()
-            buffer.clear()
-            _bufferCount.value = 0
-        }
+        val pointsToSend = bufferManager.getAndClearAll()
+        if (pointsToSend.isEmpty()) return
+        _bufferCount.value = 0
 
         val deviceId = preferencesManager.selectedDeviceId
         if (deviceId <= 0) return
@@ -419,11 +493,9 @@ class LocationTrackingService : Service() {
             onFailure = { e ->
                 Log.e(TAG, "Upload failed: ${e.message}")
                 _lastError.value = e.message
-                // Re-add failed points to buffer
-                synchronized(buffer) {
-                    buffer.addAll(0, pointsToSend)
-                    _bufferCount.value = buffer.size
-                }
+                bufferManager.insertAtFront(pointsToSend)
+                bufferManager.saveToDisk()
+                _bufferCount.value = bufferManager.size
             }
         )
     }
@@ -432,7 +504,9 @@ class LocationTrackingService : Service() {
         flushTimer?.cancel()
         flushTimer = serviceScope.launch {
             while (isActive) {
-                delay(preferencesManager.maxBufferAgeSec * 1000L)
+                val maxAge = if (preferencesManager.aggressiveUpload) 30000L
+                    else preferencesManager.maxBufferAgeSec * 1000L
+                delay(maxAge)
                 flushBuffer()
             }
         }

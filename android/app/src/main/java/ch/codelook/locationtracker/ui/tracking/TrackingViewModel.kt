@@ -27,10 +27,13 @@ class TrackingViewModel @Inject constructor(
 
     var isTracking by mutableStateOf(false)
     var trackingMode by mutableStateOf("Stopped")
-    var motionActivity by mutableStateOf("Unknown")
     var bufferCount by mutableStateOf(0)
     var currentLocation by mutableStateOf<Location?>(null)
     var lastError by mutableStateOf<String?>(null)
+    var isCharging by mutableStateOf(false)
+    var lastFixAccuracy by mutableStateOf(50.0)
+    var lastSpeed by mutableStateOf(0.0)
+    var geofenceRadius by mutableStateOf(20.0)
 
     val batchSize: Int get() = preferencesManager.batchSize
     val deviceName: String? get() = preferencesManager.selectedDeviceName
@@ -73,9 +76,6 @@ class TrackingViewModel @Inject constructor(
             svc.trackingMode.collectLatest { trackingMode = it.displayName }
         }
         viewModelScope.launch {
-            svc.motionActivity.collectLatest { motionActivity = it }
-        }
-        viewModelScope.launch {
             svc.bufferCount.collectLatest { bufferCount = it }
         }
         viewModelScope.launch {
@@ -83,6 +83,18 @@ class TrackingViewModel @Inject constructor(
         }
         viewModelScope.launch {
             svc.lastError.collectLatest { lastError = it }
+        }
+        viewModelScope.launch {
+            svc.isCharging.collectLatest { isCharging = it }
+        }
+        viewModelScope.launch {
+            svc.lastFixAccuracy.collectLatest { lastFixAccuracy = it }
+        }
+        viewModelScope.launch {
+            svc.lastSpeed.collectLatest { lastSpeed = it }
+        }
+        viewModelScope.launch {
+            svc.geofenceRadius.collectLatest { geofenceRadius = it }
         }
     }
 

@@ -3,8 +3,11 @@ import MapKit
 
 struct TrackingView: View {
     @ObservedObject var locationService = LocationService.shared
+    @ObservedObject var bluetoothService = BluetoothService.shared
 
     @State private var cameraPosition: MapCameraPosition = .automatic
+    @State private var serverPositions: [ServerPosition] = []
+    @State private var positionFetchTimer: Timer?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,6 +19,36 @@ struct TrackingView: View {
                             .foregroundStyle(.blue)
                             .padding(6)
                             .background(.white)
+                            .clipShape(Circle())
+                            .shadow(radius: 2)
+                    }
+                }
+
+                // BLE peer positions (green)
+                ForEach(Array(bluetoothService.peers.values)) { peer in
+                    if !peer.isStale {
+                        Annotation(peer.username, coordinate: CLLocationCoordinate2D(
+                            latitude: peer.latitude, longitude: peer.longitude
+                        )) {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .foregroundStyle(.white)
+                                .padding(5)
+                                .background(.green)
+                                .clipShape(Circle())
+                                .shadow(radius: 2)
+                        }
+                    }
+                }
+
+                // Server positions (orange) — exclude own device
+                ForEach(serverPositions.filter { $0.deviceId != locationService.deviceId }) { pos in
+                    Annotation(pos.username, coordinate: CLLocationCoordinate2D(
+                        latitude: pos.latitude, longitude: pos.longitude
+                    )) {
+                        Image(systemName: pos.isStale ? "clock" : "figure.stand")
+                            .foregroundStyle(.white)
+                            .padding(5)
+                            .background(pos.isStale ? .gray : .orange)
                             .clipShape(Circle())
                             .shadow(radius: 2)
                     }
@@ -100,6 +133,33 @@ struct TrackingView: View {
                                 .foregroundStyle(.green)
                         }
                     }
+
+                    // BLE status
+                    HStack(spacing: 6) {
+                        Image(systemName: "bluetooth")
+                            .foregroundStyle(bluetoothService.isRunning ? .blue : .secondary)
+                            .font(.caption)
+                        Text(bluetoothService.bleStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if !bluetoothService.peers.isEmpty {
+                            Text("·")
+                                .foregroundStyle(.secondary)
+                            Text("\(bluetoothService.peers.count) nearby")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                        if !serverPositions.isEmpty {
+                            let otherCount = serverPositions.filter { $0.deviceId != locationService.deviceId }.count
+                            if otherCount > 0 {
+                                Text("·")
+                                    .foregroundStyle(.secondary)
+                                Text("\(otherCount) on server")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
                 }
 
                 // Stats
@@ -148,7 +208,33 @@ struct TrackingView: View {
             .padding()
             .background(.ultraThinMaterial)
         }
+        .onAppear { startPositionFetch() }
+        .onDisappear { stopPositionFetch() }
     }
+
+    // MARK: - Position fetch timer
+
+    private func startPositionFetch() {
+        fetchServerPositions()
+        positionFetchTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
+            fetchServerPositions()
+        }
+    }
+
+    private func stopPositionFetch() {
+        positionFetchTimer?.invalidate()
+        positionFetchTimer = nil
+    }
+
+    private func fetchServerPositions() {
+        Task {
+            if let positions = try? await APIService.shared.fetchAllPositions() {
+                serverPositions = positions
+            }
+        }
+    }
+
+    // MARK: - Helpers
 
     private var trackingModeIcon: String {
         switch locationService.trackingMode {

@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///locations.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///data/locations.db")
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -25,13 +25,14 @@ def get_db():
 
 def init_db():
     """Create all tables, run migrations, and seed the default admin user."""
-    from models import User, Device, Location, Place, Visit, Config, ReprocessingJob  # noqa: F401
+    from models import User, Device, Location, Place, Visit, Config, ReprocessingJob, Session, CurrentPosition  # noqa: F401
 
     logger.info("Initializing database at %s", DATABASE_URL)
     Base.metadata.create_all(bind=engine)
     _migrate()
     _seed_admin()
     _seed_config()
+    _fix_stale_geofence_timestamps()
 
 
 def _migrate():
@@ -78,10 +79,12 @@ DEFAULT_THRESHOLDS = {
     "max_horizontal_accuracy_m": "100.0",
     "max_speed_ms": "85.0",
     "min_point_interval_s": "2",
-    "visit_radius_m": "50.0",
+    "max_visit_speed_ms": "2.0",
+    "visit_radius_m": "100.0",
     "min_visit_duration_s": "300",
-    "place_snap_radius_m": "80.0",
+    "place_snap_radius_m": "150.0",
     "visit_merge_gap_s": "180",
+    "position_ttl_seconds": "300",
 }
 
 
@@ -95,5 +98,113 @@ def _seed_config():
             if not db.query(Config).filter(Config.key == key).first():
                 db.add(Config(key=key, value=value))
         db.commit()
+    finally:
+        db.close()
+
+
+def _fix_stale_geofence_timestamps():
+    """One-time migration: fix geofence exit points that carry stale timestamps.
+
+    The iOS app's recordStateChange used the CLLocation.timestamp from the last
+    cached location for geofence exit events, which was often the *arrival*
+    timestamp instead of the actual departure time.  This made exit+getting-fix
+    point pairs appear to be at the same time as the preceding sleep event,
+    collapsing multi-hour stays into 30-second clusters.
+
+    For each stale geofence exit, we find the next real GPS fix (which has a
+    correct CoreLocation timestamp) and copy its timestamp to the exit point
+    and its companion "Getting fix" point.
+    """
+    from models import Config, Location, User
+
+    db = SessionLocal()
+    try:
+        # Already done?
+        if db.query(Config).filter(Config.key == "migration_stale_geofence_fixed").first():
+            return
+
+        # Find all geofence exit points and check if they're stale.
+        # A geofence exit is stale when the next real GPS fix (notes IS NULL)
+        # has a timestamp >60s newer than the exit point itself.
+        geofence_exits = (
+            db.query(Location)
+            .filter(Location.notes.like("Geofence exit%"))
+            .order_by(Location.id.asc())
+            .all()
+        )
+
+        if not geofence_exits:
+            logger.info("Stale geofence migration: no geofence exit points found, skipping")
+            db.add(Config(key="migration_stale_geofence_fixed", value="done"))
+            db.commit()
+            return
+
+        fixed_count = 0
+        for exit_pt in geofence_exits:
+            # Find the next real GPS point (no notes) on the same device
+            next_gps = (
+                db.query(Location)
+                .filter(
+                    Location.device_id == exit_pt.device_id,
+                    Location.id > exit_pt.id,
+                    Location.notes.is_(None),
+                )
+                .order_by(Location.id.asc())
+                .first()
+            )
+
+            if next_gps is None:
+                continue
+
+            gap = (next_gps.timestamp - exit_pt.timestamp).total_seconds()
+            if gap <= 60:
+                # Not stale — timestamps are close, this exit is fine
+                continue
+
+            logger.info(
+                "Fixing stale geofence exit id=%d device=%d: "
+                "old_ts=%s → new_ts=%s (gap was %.0fs)",
+                exit_pt.id, exit_pt.device_id,
+                exit_pt.timestamp, next_gps.timestamp, gap,
+            )
+            exit_pt.timestamp = next_gps.timestamp
+            fixed_count += 1
+
+            # Also fix the companion "→ Getting fix" point (id + 1) if it has
+            # the same stale timestamp
+            getting_fix = db.query(Location).filter(Location.id == exit_pt.id + 1).first()
+            if (
+                getting_fix
+                and getting_fix.device_id == exit_pt.device_id
+                and getting_fix.notes
+                and "Getting fix" in getting_fix.notes
+            ):
+                getting_fix.timestamp = next_gps.timestamp
+                fixed_count += 1
+
+        db.add(Config(key="migration_stale_geofence_fixed", value="done"))
+        db.commit()
+        logger.info("Stale geofence migration complete: fixed %d points", fixed_count)
+
+        if fixed_count > 0:
+            # Reprocess in a background thread so we don't block the event loop
+            # (reprocess_all does synchronous DB work + Nominatim HTTP calls)
+            import threading
+
+            def _reprocess_background():
+                from processing import reprocess_all
+                bg_db = SessionLocal()
+                try:
+                    users = bg_db.query(User).all()
+                    for user in users:
+                        logger.info("Reprocessing user=%d after stale geofence fix", user.id)
+                        reprocess_all(bg_db, user.id)
+                    logger.info("Background reprocess after geofence fix complete")
+                except Exception:
+                    logger.exception("Background reprocess failed")
+                finally:
+                    bg_db.close()
+
+            threading.Thread(target=_reprocess_background, daemon=True).start()
     finally:
         db.close()

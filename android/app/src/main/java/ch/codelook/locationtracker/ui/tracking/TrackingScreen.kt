@@ -6,8 +6,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.DirectionsRun
-import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -39,19 +37,17 @@ fun TrackingScreen(
         Configuration.getInstance().userAgentValue = context.packageName
     }
 
-    // Step 3: Background location (must be requested separately)
+    // Step 2: Background location (must be requested separately)
     val bgLocationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        // Start tracking regardless - foreground location is sufficient
         viewModel.startTracking()
     }
 
-    // Step 2: Activity recognition + notifications, then background location
-    val extraPermissionsLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
+    // Step 1b: Notifications, then background location
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
     ) { _ ->
-        // Now request background location separately
         val bgGranted = ContextCompat.checkSelfPermission(
             context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
@@ -69,13 +65,7 @@ fun TrackingScreen(
     ) { permissions ->
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
         if (fineGranted) {
-            // Now request activity recognition and notifications
-            extraPermissionsLauncher.launch(
-                arrayOf(
-                    Manifest.permission.ACTIVITY_RECOGNITION,
-                    Manifest.permission.POST_NOTIFICATIONS
-                )
-            )
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
@@ -174,12 +164,23 @@ fun TrackingScreen(
                     ) {
                         val (icon, color) = when (viewModel.trackingMode) {
                             "Getting Fix" -> Icons.Default.CellTower to Color(0xFF2196F3)
-                            "Stationary" -> Icons.Default.NightsStay to Color(0xFFFF9800)
-                            "Moving" -> Icons.AutoMirrored.Filled.DirectionsWalk to Color(0xFF4CAF50)
+                            "Sleeping" -> Icons.Default.NightsStay to Color(0xFFFF9800)
+                            "Continuous" -> Icons.Default.SwapCalls to Color(0xFF4CAF50)
                             else -> Icons.Default.LocationOff to Color.Gray
                         }
                         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(24.dp))
                         Text(viewModel.trackingMode, style = MaterialTheme.typography.titleMedium)
+
+                        if (viewModel.isCharging) {
+                            Icon(
+                                Icons.Default.BoltOutlined,
+                                contentDescription = "Charging",
+                                tint = Color(0xFF4CAF50),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text("Charging", style = MaterialTheme.typography.bodySmall, color = Color(0xFF4CAF50))
+                        }
+
                         Spacer(modifier = Modifier.weight(1f))
 
                         // Toggle
@@ -195,49 +196,62 @@ fun TrackingScreen(
                         )
                     }
 
-                    HorizontalDivider()
-
-                    // Motion activity
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.DirectionsRun, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text("Motion: ${viewModel.motionActivity}", style = MaterialTheme.typography.bodyMedium)
+                    // Geofence / speed info
+                    if (viewModel.isTracking && viewModel.trackingMode == "Sleeping") {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.FenceOutlined, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFFF9800))
+                            Text(
+                                "Geofence: ${viewModel.geofenceRadius.toInt()}m",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            if (viewModel.lastSpeed > 0.5) {
+                                Text(
+                                    " · ${String.format("%.0f km/h", viewModel.lastSpeed * 3.6)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
 
-                    // Buffer info
+                    HorizontalDivider()
+
+                    // Stats row
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
-                        Icon(Icons.Default.Storage, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text(
-                            "Buffer: ${viewModel.bufferCount}/${viewModel.batchSize} points",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        TextButton(
+                        StatItem("Buffered", "${viewModel.bufferCount}")
+                        StatItem("Batch", "${viewModel.batchSize}")
+                        viewModel.currentLocation?.let { loc ->
+                            StatItem("Accuracy", "${loc.accuracy.toInt()}m")
+                        }
+                        if (viewModel.lastSpeed > 0) {
+                            StatItem("Speed", String.format("%.1f m/s", viewModel.lastSpeed))
+                        }
+                    }
+
+                    // Flush button
+                    if (viewModel.bufferCount > 0) {
+                        Button(
                             onClick = { viewModel.flushNow() },
-                            enabled = viewModel.bufferCount > 0
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Flush")
+                            Text("Upload Now (${viewModel.bufferCount} points)")
                         }
                     }
 
                     // Coordinates
                     viewModel.currentLocation?.let { loc ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Default.GpsFixed, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Text(
-                                String.format("%.5f, %.5f (%.0fm)", loc.latitude, loc.longitude, loc.accuracy),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
+                        Text(
+                            String.format("%.6f, %.6f", loc.latitude, loc.longitude),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     // Error
@@ -251,5 +265,13 @@ fun TrackingScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StatItem(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, style = MaterialTheme.typography.titleMedium)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

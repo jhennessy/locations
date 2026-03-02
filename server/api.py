@@ -1,10 +1,9 @@
-"""REST API endpoints for the iOS app (authentication, devices, location uploads)."""
+"""REST API endpoints for the mobile apps (authentication, devices, location uploads, positions)."""
 
 import datetime
 import logging
 import os
 import uuid
-from functools import wraps
 from typing import Optional
 
 import requests as http_requests
@@ -12,9 +11,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from auth import create_token, decode_token, hash_password, verify_password
+from auth import create_token, decode_token, hash_password, verify_password, revoke_token, cleanup_expired_sessions
 from database import get_db
-from models import Device, Location, Place, User, Visit
+from models import Device, Location, Place, User, Visit, CurrentPosition, Config
 from processing import process_device_locations
 
 logger = logging.getLogger(__name__)
@@ -132,6 +131,53 @@ class AdminUserUpdate(BaseModel):
     new_password: Optional[str] = None
 
 
+# --- Position schemas ---
+
+class PositionPoint(BaseModel):
+    device_id: int
+    latitude: float
+    longitude: float
+    altitude: Optional[float] = None
+    accuracy: Optional[float] = None
+    speed: Optional[float] = None
+    timestamp: str
+
+
+class PositionBatch(BaseModel):
+    positions: list[PositionPoint]
+
+
+class RelayedPosition(BaseModel):
+    device_id: int
+    latitude: float
+    longitude: float
+    altitude: Optional[float] = None
+    accuracy: Optional[float] = None
+    speed: Optional[float] = None
+    timestamp: str
+
+
+class RelayBatch(BaseModel):
+    relayed_by_device_id: int
+    positions: list[RelayedPosition]
+
+
+class PositionResponse(BaseModel):
+    user_id: int
+    username: str
+    device_id: int
+    device_name: str
+    latitude: float
+    longitude: float
+    altitude: Optional[float] = None
+    accuracy: Optional[float] = None
+    speed: Optional[float] = None
+    timestamp: str
+    updated_at: str
+    is_stale: bool
+    relayed_by_device_id: Optional[int] = None
+
+
 # ---------------------------------------------------------------------------
 # Auth dependency
 # ---------------------------------------------------------------------------
@@ -140,7 +186,7 @@ def get_current_user(authorization: str = Header(...), db: Session = Depends(get
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
     token = authorization[7:]
-    payload = decode_token(token)
+    payload = decode_token(token, db)
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     user = db.query(User).filter(User.id == payload["sub"]).first()
@@ -172,7 +218,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     logger.info("New user registered: %s (id=%d)", req.username, user.id)
-    token = create_token(user.id, user.username)
+    token = create_token(user.id, user.username, db)
     return TokenResponse(token=token, user_id=user.id, username=user.username)
 
 
@@ -183,8 +229,19 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         logger.warning("Failed login attempt for username: %s", req.username)
         raise HTTPException(status_code=401, detail="Invalid credentials")
     logger.info("User logged in: %s (id=%d)", user.username, user.id)
-    token = create_token(user.id, user.username)
+    # Clean up expired sessions on login
+    cleanup_expired_sessions(db)
+    token = create_token(user.id, user.username, db)
     return TokenResponse(token=token, user_id=user.id, username=user.username)
+
+
+@router.post("/logout")
+def logout(authorization: str = Header(...), db: Session = Depends(get_db)):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    token = authorization[7:]
+    revoke_token(token, db)
+    return {"status": "logged out"}
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +509,127 @@ def change_password(
     db.commit()
     logger.info("Password changed for user=%s", user.username)
     return {"status": "password changed"}
+
+
+# ---------------------------------------------------------------------------
+# Position endpoints (live sharing)
+# ---------------------------------------------------------------------------
+
+def _get_position_ttl(db: Session) -> int:
+    """Return position_ttl_seconds from config, default 300."""
+    cfg = db.query(Config).filter(Config.key == "position_ttl_seconds").first()
+    return int(cfg.value) if cfg else 300
+
+
+@router.post("/positions")
+def update_positions(batch: PositionBatch, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Upsert own device positions.  Does NOT trigger visit detection."""
+    upserted = 0
+    for pt in batch.positions:
+        device = db.query(Device).filter(Device.id == pt.device_id, Device.user_id == user.id).first()
+        if not device:
+            continue
+        ts = datetime.datetime.fromisoformat(pt.timestamp)
+        existing = db.query(CurrentPosition).filter(CurrentPosition.device_id == pt.device_id).first()
+        if existing:
+            existing.latitude = pt.latitude
+            existing.longitude = pt.longitude
+            existing.altitude = pt.altitude
+            existing.accuracy = pt.accuracy
+            existing.speed = pt.speed
+            existing.timestamp = ts
+            existing.updated_at = datetime.datetime.utcnow()
+            existing.relayed_by_device_id = None
+        else:
+            db.add(CurrentPosition(
+                user_id=user.id,
+                device_id=pt.device_id,
+                latitude=pt.latitude,
+                longitude=pt.longitude,
+                altitude=pt.altitude,
+                accuracy=pt.accuracy,
+                speed=pt.speed,
+                timestamp=ts,
+                relayed_by_device_id=None,
+            ))
+        upserted += 1
+    db.commit()
+    return {"upserted": upserted}
+
+
+@router.get("/positions", response_model=list[PositionResponse])
+def get_all_positions(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return current positions for ALL users' devices (cross-user visibility)."""
+    ttl = _get_position_ttl(db)
+    now = datetime.datetime.utcnow()
+    positions = db.query(CurrentPosition).all()
+    results = []
+    for p in positions:
+        dev = db.query(Device).filter(Device.id == p.device_id).first()
+        usr = db.query(User).filter(User.id == p.user_id).first()
+        if not dev or not usr:
+            continue
+        age = (now - p.timestamp).total_seconds()
+        results.append(PositionResponse(
+            user_id=p.user_id,
+            username=usr.username,
+            device_id=p.device_id,
+            device_name=dev.name,
+            latitude=p.latitude,
+            longitude=p.longitude,
+            altitude=p.altitude,
+            accuracy=p.accuracy,
+            speed=p.speed,
+            timestamp=p.timestamp.isoformat(),
+            updated_at=p.updated_at.isoformat() if p.updated_at else p.timestamp.isoformat(),
+            is_stale=age > ttl,
+            relayed_by_device_id=p.relayed_by_device_id,
+        ))
+    return results
+
+
+@router.post("/positions/relay")
+def relay_positions(batch: RelayBatch, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Upload BLE-relayed peer positions.  Only updates if newer timestamp."""
+    relay_device = db.query(Device).filter(
+        Device.id == batch.relayed_by_device_id, Device.user_id == user.id
+    ).first()
+    if not relay_device:
+        raise HTTPException(status_code=404, detail="Relay device not found or not owned by user")
+
+    relayed = 0
+    for pt in batch.positions:
+        device = db.query(Device).filter(Device.id == pt.device_id).first()
+        if not device:
+            continue
+        ts = datetime.datetime.fromisoformat(pt.timestamp)
+        existing = db.query(CurrentPosition).filter(CurrentPosition.device_id == pt.device_id).first()
+        if existing:
+            if ts <= existing.timestamp:
+                continue  # Only update if newer
+            existing.latitude = pt.latitude
+            existing.longitude = pt.longitude
+            existing.altitude = pt.altitude
+            existing.accuracy = pt.accuracy
+            existing.speed = pt.speed
+            existing.timestamp = ts
+            existing.updated_at = datetime.datetime.utcnow()
+            existing.relayed_by_device_id = batch.relayed_by_device_id
+        else:
+            db.add(CurrentPosition(
+                user_id=device.user_id,
+                device_id=pt.device_id,
+                latitude=pt.latitude,
+                longitude=pt.longitude,
+                altitude=pt.altitude,
+                accuracy=pt.accuracy,
+                speed=pt.speed,
+                timestamp=ts,
+                relayed_by_device_id=batch.relayed_by_device_id,
+            ))
+        relayed += 1
+    db.commit()
+    return {"relayed": relayed}
 
 
 # ---------------------------------------------------------------------------

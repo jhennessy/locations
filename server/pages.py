@@ -16,11 +16,15 @@ from processing import reprocess_all
 async def _ensure_timezone():
     """Detect browser timezone via JS and store in the user session."""
     if "timezone" not in app.storage.user:
-        tz = await ui.run_javascript(
-            "Intl.DateTimeFormat().resolvedOptions().timeZone"
-        )
-        if tz:
-            app.storage.user["timezone"] = tz
+        try:
+            tz = await ui.run_javascript(
+                "Intl.DateTimeFormat().resolvedOptions().timeZone",
+                timeout=5.0,
+            )
+            if tz:
+                app.storage.user["timezone"] = tz
+        except TimeoutError:
+            pass
 
 
 def _fmt(dt: datetime.datetime | None, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
@@ -42,7 +46,7 @@ def get_session_user() -> tuple[Session, User | None]:
     token = app.storage.user.get("token")
     if not token:
         return db, None
-    payload = decode_token(token)
+    payload = decode_token(token, db)
     if payload is None:
         return db, None
     user = db.query(User).filter(User.id == payload["sub"]).first()
@@ -137,7 +141,7 @@ async def login_page():
         db = SessionLocal()
         user = db.query(User).filter(User.username == username.value).first()
         if user and verify_password(password.value, user.password_hash):
-            token = create_token(user.id, user.username)
+            token = create_token(user.id, user.username, db)
             app.storage.user["token"] = token
             app.storage.user["username"] = user.username
             ui.navigate.to("/")
@@ -187,7 +191,7 @@ async def register_page():
         db.add(user)
         db.commit()
         db.refresh(user)
-        token = create_token(user.id, user.username)
+        token = create_token(user.id, user.username, db)
         app.storage.user["token"] = token
         app.storage.user["username"] = user.username
         db.close()
@@ -1033,6 +1037,7 @@ _THRESHOLD_LABELS = {
     "max_horizontal_accuracy_m": ("Max GPS Accuracy (m)", "Discard points with accuracy worse than this"),
     "max_speed_ms": ("Max Speed (m/s)", "Filter out physically impossible speeds (~306 km/h = 85)"),
     "min_point_interval_s": ("Min Point Interval (s)", "Deduplicate points closer than this in time"),
+    "max_visit_speed_ms": ("Max Visit Speed (m/s)", "Filter transit points above this speed before visit detection (~7 km/h = 2.0)"),
     "visit_radius_m": ("Visit Cluster Radius (m)", "Max radius for grouping stationary points"),
     "min_visit_duration_s": ("Min Visit Duration (s)", "Minimum seconds to count as a visit (300 = 5 min)"),
     "place_snap_radius_m": ("Place Snap Radius (m)", "Snap visit to existing place if within this distance"),

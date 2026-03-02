@@ -21,6 +21,7 @@ class SettingsViewModel @Inject constructor(
     var serverUrl by mutableStateOf(preferencesManager.serverUrl)
     var batchSize by mutableFloatStateOf(preferencesManager.batchSize.toFloat())
     var maxBufferAge by mutableFloatStateOf(preferencesManager.maxBufferAgeSec.toFloat())
+    var aggressiveUpload by mutableStateOf(preferencesManager.aggressiveUpload)
     var loggedOut by mutableStateOf(false)
     var deviceCleared by mutableStateOf(false)
 
@@ -40,6 +41,17 @@ class SettingsViewModel @Inject constructor(
     fun updateMaxBufferAge(age: Float) {
         maxBufferAge = age
         preferencesManager.maxBufferAgeSec = age.toInt()
+    }
+
+    fun toggleAggressiveUpload(enabled: Boolean) {
+        aggressiveUpload = enabled
+        preferencesManager.aggressiveUpload = enabled
+        if (enabled) {
+            batchSize = 1f
+            maxBufferAge = 30f
+            preferencesManager.batchSize = 1
+            preferencesManager.maxBufferAgeSec = 30
+        }
     }
 
     fun changeDevice() {
