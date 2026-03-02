@@ -59,6 +59,18 @@ class LocationService: NSObject, ObservableObject {
 
     // MARK: - Configuration
 
+    /// Whether Bluetooth mesh is enabled for peer-to-peer position sharing.
+    @Published var bleEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(bleEnabled, forKey: "ble_enabled")
+            if bleEnabled && isTracking {
+                bluetooth.start()
+            } else if !bleEnabled {
+                bluetooth.stop()
+            }
+        }
+    }
+
     /// When enabled, upload every point immediately (batch size 1, 30s max age).
     @Published var aggressiveUpload: Bool {
         didSet {
@@ -160,6 +172,12 @@ class LocationService: NSObject, ObservableObject {
     override init() {
         let aggressive = UserDefaults.standard.bool(forKey: "aggressive_upload")
         self.aggressiveUpload = aggressive
+        // Default to true if key has never been set
+        if UserDefaults.standard.object(forKey: "ble_enabled") == nil {
+            self.bleEnabled = true
+        } else {
+            self.bleEnabled = UserDefaults.standard.bool(forKey: "ble_enabled")
+        }
         super.init()
         if aggressive {
             batchSize = 1
@@ -259,8 +277,8 @@ class LocationService: NSObject, ObservableObject {
         Log.location.notice("Starting tracking (buffer: \(self.buffer.count) points, background: \(self.isInBackground))")
         recordStateChange("Tracking started (bg: \(isInBackground))")
 
-        // Start BLE mesh
-        bluetooth.start()
+        // Start BLE mesh if enabled
+        if bleEnabled { bluetooth.start() }
 
         // Get a good fix first, then go to sleep with a geofence
         beginGettingFix(reason: "Tracking started")

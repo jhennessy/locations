@@ -374,6 +374,8 @@ def get_visits(
     device_id: int,
     limit: int = 100,
     offset: int = 0,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -381,9 +383,23 @@ def get_visits(
     if not device:
         raise HTTPException(status_code=404, detail="Device not found or not owned by user")
 
+    query = db.query(Visit).filter(Visit.device_id == device_id)
+
+    if start_date:
+        try:
+            start = datetime.datetime.fromisoformat(start_date)
+            query = query.filter(Visit.arrival >= start)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format (use ISO 8601)")
+    if end_date:
+        try:
+            end = datetime.datetime.fromisoformat(end_date)
+            query = query.filter(Visit.arrival < end)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format (use ISO 8601)")
+
     visits = (
-        db.query(Visit)
-        .filter(Visit.device_id == device_id)
+        query
         .order_by(Visit.arrival.desc())
         .offset(offset)
         .limit(limit)

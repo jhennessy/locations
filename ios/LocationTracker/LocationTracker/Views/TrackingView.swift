@@ -134,30 +134,89 @@ struct TrackingView: View {
                         }
                     }
 
-                    // BLE status
-                    HStack(spacing: 6) {
-                        Image(systemName: "bluetooth")
-                            .foregroundStyle(bluetoothService.isRunning ? .blue : .secondary)
-                            .font(.caption)
+                }
+
+                // Bluetooth mesh section
+                Divider()
+
+                HStack {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .foregroundStyle(bluetoothService.isRunning ? .blue : .secondary)
+
+                    Text("Bluetooth Mesh")
+                        .font(.headline)
+
+                    if bluetoothService.isRunning {
                         Text(bluetoothService.bleStatus)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        if !bluetoothService.peers.isEmpty {
-                            Text("·")
-                                .foregroundStyle(.secondary)
-                            Text("\(bluetoothService.peers.count) nearby")
+                    }
+
+                    Spacer()
+
+                    Toggle("", isOn: Binding(
+                        get: { locationService.bleEnabled },
+                        set: { locationService.bleEnabled = $0 }
+                    ))
+                    .labelsHidden()
+                }
+
+                if bluetoothService.isRunning {
+                    // Peer list
+                    let activePeers = bluetoothService.peers.values
+                        .sorted { $0.username < $1.username }
+
+                    if activePeers.isEmpty {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Scanning for nearby devices...")
                                 .font(.caption)
-                                .foregroundStyle(.green)
+                                .foregroundStyle(.secondary)
                         }
-                        if !serverPositions.isEmpty {
-                            let otherCount = serverPositions.filter { $0.deviceId != locationService.deviceId }.count
-                            if otherCount > 0 {
-                                Text("·")
+                    } else {
+                        ForEach(Array(activePeers)) { peer in
+                            HStack(spacing: 10) {
+                                Image(systemName: peer.isStale ? "circle.dotted" : "circle.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(peer.isStale ? Color.secondary : Color.green)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(peer.username)
+                                        .font(.subheadline)
+                                    Text("Device \(peer.id)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                if let myLocation = locationService.lastLocation {
+                                    let peerLocation = CLLocation(latitude: peer.latitude, longitude: peer.longitude)
+                                    let distance = myLocation.distance(from: peerLocation)
+                                    Text(formatDistance(distance))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Text(peer.timestamp, format: .dateTime.hour().minute())
+                                    .font(.caption2)
                                     .foregroundStyle(.secondary)
-                                Text("\(otherCount) on server")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
                             }
+                        }
+                    }
+
+                    // Server positions
+                    let otherPositions = serverPositions.filter { $0.deviceId != locationService.deviceId }
+                    if !otherPositions.isEmpty {
+                        Divider()
+                        HStack(spacing: 6) {
+                            Image(systemName: "globe")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                            Text("\(otherPositions.count) device\(otherPositions.count == 1 ? "" : "s") on server")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
                         }
                     }
                 }
@@ -259,6 +318,14 @@ struct TrackingView: View {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func formatDistance(_ meters: Double) -> String {
+        if meters < 1000 {
+            return String(format: "%.0f m", meters)
+        } else {
+            return String(format: "%.1f km", meters / 1000)
         }
     }
 }

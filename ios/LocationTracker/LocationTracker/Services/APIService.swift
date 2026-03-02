@@ -150,8 +150,17 @@ class APIService: ObservableObject {
 
     // MARK: - Visits
 
-    func fetchVisits(deviceId: Int, limit: Int = 100) async throws -> [VisitInfo] {
-        let data = try await makeRequest(path: "/api/visits/\(deviceId)?limit=\(limit)", method: "GET")
+    func fetchVisits(deviceId: Int, limit: Int = 100, startDate: Date? = nil, endDate: Date? = nil) async throws -> [VisitInfo] {
+        var path = "/api/visits/\(deviceId)?limit=\(limit)"
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        if let startDate {
+            path += "&start_date=\(formatter.string(from: startDate))"
+        }
+        if let endDate {
+            path += "&end_date=\(formatter.string(from: endDate))"
+        }
+        let data = try await makeRequest(path: path, method: "GET")
         return try JSONDecoder().decode([VisitInfo].self, from: data)
     }
 
