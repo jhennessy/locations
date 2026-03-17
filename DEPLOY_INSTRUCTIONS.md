@@ -7,7 +7,7 @@ Replace the current GHCR image build + Watchtower deployment with an in-containe
 ## Architecture
 
 ```
-Container (ghcr.io/jhennessy/locations-runner:latest)
+Container (ghcr.io/jhennessy/locationz:latest)
 ├── /runner          # GitHub Actions runner binary (baked into image)
 ├── /app             # Git clone of the repo (cloned at first boot by entrypoint)
 │   └── server/      # Python app code
@@ -334,9 +334,9 @@ jobs:
 
 ```yaml
 services:
-  location-tracker:
-    image: ghcr.io/jhennessy/locations-runner:latest
-    container_name: location-tracker
+  locationz:
+    image: ghcr.io/jhennessy/locationz:latest
+    container_name: locationz
     restart: unless-stopped
     ports:
       - "8080:8380"

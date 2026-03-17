@@ -1,8 +1,8 @@
-# Location Tracker
+# Locationz
 
 A personal location tracking system with an iOS app for continuous GPS recording and a Python web server for data processing, visit detection, and analytics.
 
-Hosted at **https://locations.codelook.ch**
+Hosted at **https://locationz.codelook.ch**
 
 ## Architecture
 
@@ -87,8 +87,8 @@ Generate secrets with: `python3 -c "import secrets; print(secrets.token_hex(32))
 
 ### Setup
 
-1. Open `ios/LocationTracker/LocationTracker.xcodeproj` in Xcode
-2. The server URL defaults to `https://locations.codelook.ch` and can be changed in Settings
+1. Open `ios/Locationz/Locationz.xcodeproj` in Xcode
+2. The server URL defaults to `https://locationz.codelook.ch` and can be changed in Settings
 3. Build and run on a device (location tracking requires a real device)
 
 ### Permissions
@@ -97,12 +97,12 @@ The app requests "Always" location access for background tracking. iOS uses a tw
 1. First prompt: "Allow While Using App"
 2. Second prompt (appears later): "Always Allow"
 
-You can also enable it manually: Settings > Location Tracker > Location > Always.
+You can also enable it manually: Settings > Locationz > Location > Always.
 
 ## CI/CD
 
 Pushing to `main` with changes in `server/` triggers:
-1. Docker image build and push to `ghcr.io/jhennessy/locations`
+1. Docker image build and push to `ghcr.io/jhennessy/locationz`
 2. Deploy endpoint call to trigger Watchtower container update
 
 ## API Endpoints
@@ -118,7 +118,7 @@ Pushing to `main` with changes in `server/` triggers:
 | GET | `/api/locations/{device_id}` | Yes | Get locations |
 | GET | `/api/visits/{device_id}` | Yes | Get visits |
 | POST | `/api/visits/{device_id}/reprocess` | Yes | Reprocess visits |
-| GET | `/api/places` | Yes | Get places |
+| GET | `/api/places` | Yes | Get frequent places |
 | GET | `/api/places/frequent` | Yes | Get frequent places |
 | PUT | `/api/places/{id}/name` | Yes | Rename place |
 | POST | `/api/change-password` | Yes | Change password |

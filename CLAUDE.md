@@ -26,13 +26,13 @@ ios/             iOS app (SwiftUI, Xcode project)
 
 ```bash
 # Run server tests
-cd server && pytest
+cd server && uv run pytest
 
 # Run server locally
-cd server && python main.py
+cd server && uv run python main.py
 
 # Build iOS app
-cd ios/LocationTracker && xcodebuild -scheme LocationTracker -destination 'generic/platform=iOS' build
+cd ios/Locationz && xcodebuild -scheme Locationz -destination 'generic/platform=iOS' build
 ```
 
 ## Development Notes
@@ -50,8 +50,8 @@ cd ios/LocationTracker && xcodebuild -scheme LocationTracker -destination 'gener
 
 ## Environment Variables
 
-Required in `server/.env`: `SECRET_KEY`, `STORAGE_SECRET`, `DEPLOY_TOKEN`, `WATCHTOWER_TOKEN`
+Required in `server/.env`: `SECRET_KEY`, `STORAGE_SECRET`, `DATA_SECRET` (for data transfer)
 
 ## Deployment
 
-Push to `main` with `server/**` changes triggers GitHub Actions → builds Docker image → pushes to GHCR → calls `/api/deploy` → Watchtower pulls new image and restarts container.
+Railway is connected to the GitHub repo and auto-deploys on push to `main`.

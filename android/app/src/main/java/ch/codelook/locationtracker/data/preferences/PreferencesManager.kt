@@ -89,7 +89,7 @@ class PreferencesManager @Inject constructor(
         private const val KEY_BATCH_SIZE = "batch_size"
         private const val KEY_MAX_BUFFER_AGE = "max_buffer_age"
 
-        const val DEFAULT_SERVER_URL = "https://locations.codelook.ch"
+        const val DEFAULT_SERVER_URL = "https://locationz.codelook.ch"
         const val DEFAULT_BATCH_SIZE = 50
         const val DEFAULT_MAX_BUFFER_AGE = 300
     }

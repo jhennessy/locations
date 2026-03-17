@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "5E6F70819203A4B5C6D7E8F9"
-               BuildableName = "LocationTracker.app"
-               BlueprintName = "LocationTracker"
-               ReferencedContainer = "container:LocationTracker.xcodeproj">
+               BuildableName = "Locationz.app"
+               BlueprintName = "Locationz"
+               ReferencedContainer = "container:Locationz.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -35,9 +35,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "5E6F70819203A4B5C6D7E900"
-               BuildableName = "LocationTrackerTests.xctest"
-               BlueprintName = "LocationTrackerTests"
-               ReferencedContainer = "container:LocationTracker.xcodeproj">
+               BuildableName = "LocationzTests.xctest"
+               BlueprintName = "LocationzTests"
+               ReferencedContainer = "container:Locationz.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -57,9 +57,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5E6F70819203A4B5C6D7E8F9"
-            BuildableName = "LocationTracker.app"
-            BlueprintName = "LocationTracker"
-            ReferencedContainer = "container:LocationTracker.xcodeproj">
+            BuildableName = "Locationz.app"
+            BlueprintName = "Locationz"
+            ReferencedContainer = "container:Locationz.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -74,9 +74,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5E6F70819203A4B5C6D7E8F9"
-            BuildableName = "LocationTracker.app"
-            BlueprintName = "LocationTracker"
-            ReferencedContainer = "container:LocationTracker.xcodeproj">
+            BuildableName = "Locationz.app"
+            BlueprintName = "Locationz"
+            ReferencedContainer = "container:Locationz.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

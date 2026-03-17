@@ -6,8 +6,12 @@ import os
 import uuid
 from typing import Optional
 
+import hashlib
+import hmac
+
 import requests as http_requests
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -19,6 +23,11 @@ from processing import process_device_locations
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -706,31 +715,63 @@ def admin_delete_user(
 
 
 # ---------------------------------------------------------------------------
-# Deploy endpoint (triggered by GitHub Actions → tells Watchtower to update)
+# Data transfer (secured by DATA_SECRET env var)
 # ---------------------------------------------------------------------------
 
-@router.post("/deploy")
-def trigger_deploy(authorization: str = Header(...)):
-    deploy_token = os.environ.get("DEPLOY_TOKEN")
-    if not deploy_token:
-        raise HTTPException(status_code=503, detail="Deploy not configured")
-    if authorization != f"Bearer {deploy_token}":
-        raise HTTPException(status_code=401, detail="Invalid deploy token")
+DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+DATA_SECRET = os.environ.get("DATA_SECRET", "")
+SKIP_FILES = {".DS_Store", "locationz.log"}
 
-    watchtower_token = os.environ.get("WATCHTOWER_TOKEN")
-    if not watchtower_token:
-        raise HTTPException(status_code=503, detail="Watchtower not configured")
-    watchtower_url = os.environ.get("WATCHTOWER_URL", "http://watchtower:8080")
 
-    logger.info("Deploy triggered via API")
-    try:
-        resp = http_requests.post(
-            f"{watchtower_url}/v1/update",
-            headers={"Authorization": f"Bearer {watchtower_token}"},
-            timeout=30,
-        )
-        logger.info("Watchtower responded with status %d", resp.status_code)
-        return {"status": "update triggered", "watchtower_status": resp.status_code}
-    except http_requests.RequestException as e:
-        logger.error("Failed to reach Watchtower: %s", e)
-        raise HTTPException(status_code=502, detail=f"Failed to reach Watchtower: {e}")
+def _require_data_secret(x_data_secret: str = Header()):
+    if not DATA_SECRET:
+        raise HTTPException(status_code=503, detail="DATA_SECRET not configured on server")
+    if not hmac.compare_digest(x_data_secret, DATA_SECRET):
+        raise HTTPException(status_code=403, detail="Invalid secret")
+
+
+@router.get("/data/status", dependencies=[Depends(_require_data_secret)])
+def data_status():
+    return {"ok": True, "data_dir": DATA_DIR}
+
+
+@router.get("/data/checksums", dependencies=[Depends(_require_data_secret)])
+def data_checksums():
+    files = {}
+    for root, _, filenames in os.walk(DATA_DIR):
+        for name in filenames:
+            if name in SKIP_FILES:
+                continue
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, DATA_DIR)
+            md5 = hashlib.md5()
+            with open(full, "rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    md5.update(chunk)
+            files[rel] = {"md5": md5.hexdigest(), "size": os.path.getsize(full)}
+    return {"files": files}
+
+
+@router.post("/data/upload", dependencies=[Depends(_require_data_secret)])
+async def data_upload(file: UploadFile, path: str = Header()):
+    dest = os.path.realpath(os.path.join(DATA_DIR, path))
+    if not dest.startswith(os.path.realpath(DATA_DIR)):
+        raise HTTPException(status_code=400, detail=f"Bad path: {path}")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    total = 0
+    with open(dest, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            f.write(chunk)
+            total += len(chunk)
+    logger.info("Data upload: %s (%d bytes)", path, total)
+    return {"ok": True, "path": path, "bytes": total}
+
+
+@router.get("/data/download", dependencies=[Depends(_require_data_secret)])
+def data_download(path: str):
+    dest = os.path.realpath(os.path.join(DATA_DIR, path))
+    if not dest.startswith(os.path.realpath(DATA_DIR)):
+        raise HTTPException(status_code=400, detail=f"Bad path: {path}")
+    if not os.path.isfile(dest):
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    return FileResponse(dest, filename=os.path.basename(dest))

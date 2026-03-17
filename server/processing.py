@@ -319,7 +319,7 @@ def reverse_geocode(lat: float, lon: float) -> Optional[str]:
                 "zoom": 18,
                 "addressdetails": 1,
             },
-            headers={"User-Agent": "LocationTracker/1.0"},
+            headers={"User-Agent": "Locationz/1.0"},
             timeout=10,
         )
         _last_nominatim_call = time.time()

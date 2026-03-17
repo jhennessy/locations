@@ -87,7 +87,7 @@ def _nav_link(icon: str, label: str, href: str):
 def _nav_drawer(user=None):
     """Shared left-drawer navigation."""
     with ui.left_drawer().classes("bg-blue-1"):
-        ui.label("Location Tracker").classes("text-h6 q-pa-sm q-mb-sm")
+        ui.label("Locationz").classes("text-h6 q-pa-sm q-mb-sm")
         _nav_link("dashboard", "Dashboard", "/")
         _nav_link("phone_iphone", "Devices", "/devices")
         _nav_link("map", "Map", "/map")
@@ -108,7 +108,7 @@ def _header(user):
         ui.navigate.to("/login")
 
     with ui.header().classes("items-center justify-between"):
-        ui.label("Location Tracker").classes("text-h6")
+        ui.label("Locationz").classes("text-h6")
         with ui.row().classes("items-center"):
             ui.label(f"Logged in as {user.username}")
             ui.button("Logout", on_click=logout).props("flat color=white")
@@ -150,7 +150,7 @@ async def login_page():
         db.close()
 
     with ui.column().classes("absolute-center items-center"):
-        ui.label("Location Tracker").classes("text-h4 q-mb-md")
+        ui.label("Locationz").classes("text-h4 q-mb-md")
         ui.label("Sign in to your account").classes("text-subtitle1 q-mb-lg")
         with ui.card().classes("w-80"):
             username = ui.input("Username").classes("w-full")
@@ -1343,7 +1343,7 @@ async def logs_page():
     _nav_drawer(user)
 
     LOG_DIR = os.environ.get("LOG_DIR", "/data" if os.path.isdir("/data") else ".")
-    LOG_FILE = os.path.join(LOG_DIR, "location-tracker.log")
+    LOG_FILE = os.path.join(LOG_DIR, "locationz.log")
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Server Logs").classes("text-h5 q-mb-md")

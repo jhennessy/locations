@@ -1,10 +1,11 @@
 FROM python:3.12-slim
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir \
-    $(grep -vE 'pytest|httpx' requirements.txt)
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 COPY . .
 
@@ -13,4 +14,4 @@ ENV COMMIT_SHA=${COMMIT_SHA}
 
 EXPOSE 8080
 
-CMD ["python", "main.py"]
+CMD ["uv", "run", "--frozen", "--no-dev", "python", "main.py"]

@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct LocationTrackerApp: App {
+struct LocationzApp: App {
     @StateObject private var api = APIService.shared
     @Environment(\.scenePhase) private var scenePhase
 

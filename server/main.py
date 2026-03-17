@@ -13,7 +13,7 @@ from database import init_db
 # Logging setup
 # ---------------------------------------------------------------------------
 LOG_DIR = os.environ.get("LOG_DIR", "/data" if os.path.isdir("/data") else ".")
-LOG_FILE = os.path.join(LOG_DIR, "location-tracker.log")
+LOG_FILE = os.path.join(LOG_DIR, "locationz.log")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +26,7 @@ logging.basicConfig(
         ),
     ],
 )
-logger = logging.getLogger("locationtracker")
+logger = logging.getLogger("locationz")
 
 # Quiet noisy libraries
 logging.getLogger("watchfiles").setLevel(logging.WARNING)
@@ -45,7 +45,7 @@ app.on_startup(init_db)
 import pages  # noqa: F401, E402
 
 ui.run(
-    title="Location Tracker",
+    title="Locationz",
     favicon="static/icon-512.png",
     port=8380,
     storage_secret=os.environ.get("STORAGE_SECRET", "change-me-in-production"),

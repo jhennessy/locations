@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		8A1B2C3D4E5F60718293A4B5 /* LocationTrackerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4B5 /* LocationTrackerApp.swift */; };
+		8A1B2C3D4E5F60718293A4B5 /* LocationzApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4B5 /* LocationzApp.swift */; };
 		8A1B2C3D4E5F60718293A4B6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4B6 /* ContentView.swift */; };
 		8A1B2C3D4E5F60718293A4B7 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4B7 /* LoginView.swift */; };
 		8A1B2C3D4E5F60718293A4B8 /* RegisterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4B8 /* RegisterView.swift */; };
@@ -36,12 +36,12 @@
 			containerPortal = 0A1B2C3D4E5F60718293A4B5 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 5E6F70819203A4B5C6D7E8F9;
-			remoteInfo = LocationTracker;
+			remoteInfo = Locationz;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		1A2B3C4D5E6F70819203A4B5 /* LocationTrackerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationTrackerApp.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F70819203A4B5 /* LocationzApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationzApp.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4B6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4B7 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4B8 /* RegisterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterView.swift; sourceTree = "<group>"; };
@@ -63,8 +63,8 @@
 		1A2B3C4D5E6F70819203A4D2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4F0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4E0 /* ModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTests.swift; sourceTree = "<group>"; };
-		9F0E1D2C3B4A59687706A5B4 /* LocationTracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LocationTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		9F0E1D2C3B4A59687706A5B5 /* LocationTrackerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocationTrackerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9F0E1D2C3B4A59687706A5B4 /* Locationz.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Locationz.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9F0E1D2C3B4A59687706A5B5 /* LocationzTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocationzTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,30 +88,30 @@
 		2B3C4D5E6F70819203A4B5C6 = {
 			isa = PBXGroup;
 			children = (
-				2B3C4D5E6F70819203A4B5C7 /* LocationTracker */,
-				2B3C4D5E6F70819203A4B5D0 /* LocationTrackerTests */,
+				2B3C4D5E6F70819203A4B5C7 /* Locationz */,
+				2B3C4D5E6F70819203A4B5D0 /* LocationzTests */,
 				2B3C4D5E6F70819203A4B5C8 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		2B3C4D5E6F70819203A4B5C7 /* LocationTracker */ = {
+		2B3C4D5E6F70819203A4B5C7 /* Locationz */ = {
 			isa = PBXGroup;
 			children = (
-				1A2B3C4D5E6F70819203A4B5 /* LocationTrackerApp.swift */,
+				1A2B3C4D5E6F70819203A4B5 /* LocationzApp.swift */,
 				1A2B3C4D5E6F70819203A4D2 /* Info.plist */,
 				1A2B3C4D5E6F70819203A4F0 /* Assets.xcassets */,
 				2B3C4D5E6F70819203A4B5C9 /* Models */,
 				2B3C4D5E6F70819203A4B5CA /* Views */,
 				2B3C4D5E6F70819203A4B5CB /* Services */,
 			);
-			path = LocationTracker;
+			path = Locationz;
 			sourceTree = "<group>";
 		};
 		2B3C4D5E6F70819203A4B5C8 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				9F0E1D2C3B4A59687706A5B4 /* LocationTracker.app */,
-				9F0E1D2C3B4A59687706A5B5 /* LocationTrackerTests.xctest */,
+				9F0E1D2C3B4A59687706A5B4 /* Locationz.app */,
+				9F0E1D2C3B4A59687706A5B5 /* LocationzTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -155,20 +155,20 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
-		2B3C4D5E6F70819203A4B5D0 /* LocationTrackerTests */ = {
+		2B3C4D5E6F70819203A4B5D0 /* LocationzTests */ = {
 			isa = PBXGroup;
 			children = (
 				1A2B3C4D5E6F70819203A4E0 /* ModelTests.swift */,
 			);
-			path = LocationTrackerTests;
+			path = LocationzTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		5E6F70819203A4B5C6D7E8F9 /* LocationTracker */ = {
+		5E6F70819203A4B5C6D7E8F9 /* Locationz */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 7A8B9C0D1E2F30415263A4B5 /* Build configuration list for PBXNativeTarget "LocationTracker" */;
+			buildConfigurationList = 7A8B9C0D1E2F30415263A4B5 /* Build configuration list for PBXNativeTarget "Locationz" */;
 			buildPhases = (
 				6F70819203A4B5C6D7E8F90A /* Sources */,
 				4D5E6F70819203A4B5C6D7E8 /* Frameworks */,
@@ -178,14 +178,14 @@
 			);
 			dependencies = (
 			);
-			name = LocationTracker;
-			productName = LocationTracker;
-			productReference = 9F0E1D2C3B4A59687706A5B4 /* LocationTracker.app */;
+			name = Locationz;
+			productName = Locationz;
+			productReference = 9F0E1D2C3B4A59687706A5B4 /* Locationz.app */;
 			productType = "com.apple.product-type.application";
 		};
-		5E6F70819203A4B5C6D7E900 /* LocationTrackerTests */ = {
+		5E6F70819203A4B5C6D7E900 /* LocationzTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 7A8B9C0D1E2F30415263A4B7 /* Build configuration list for PBXNativeTarget "LocationTrackerTests" */;
+			buildConfigurationList = 7A8B9C0D1E2F30415263A4B7 /* Build configuration list for PBXNativeTarget "LocationzTests" */;
 			buildPhases = (
 				6F70819203A4B5C6D7E8F90C /* Sources */,
 				4D5E6F70819203A4B5C6D7E9 /* Frameworks */,
@@ -195,9 +195,9 @@
 			dependencies = (
 				3C4D5E6F70819203A4B5C6D8 /* PBXTargetDependency */,
 			);
-			name = LocationTrackerTests;
-			productName = LocationTrackerTests;
-			productReference = 9F0E1D2C3B4A59687706A5B5 /* LocationTrackerTests.xctest */;
+			name = LocationzTests;
+			productName = LocationzTests;
+			productReference = 9F0E1D2C3B4A59687706A5B5 /* LocationzTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -219,7 +219,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 7A8B9C0D1E2F30415263A4B3 /* Build configuration list for PBXProject "LocationTracker" */;
+			buildConfigurationList = 7A8B9C0D1E2F30415263A4B3 /* Build configuration list for PBXProject "Locationz" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -232,8 +232,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				5E6F70819203A4B5C6D7E8F9 /* LocationTracker */,
-				5E6F70819203A4B5C6D7E900 /* LocationTrackerTests */,
+				5E6F70819203A4B5C6D7E8F9 /* Locationz */,
+				5E6F70819203A4B5C6D7E900 /* LocationzTests */,
 			);
 		};
 /* End PBXProject section */
@@ -254,7 +254,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8A1B2C3D4E5F60718293A4B5 /* LocationTrackerApp.swift in Sources */,
+				8A1B2C3D4E5F60718293A4B5 /* LocationzApp.swift in Sources */,
 				8A1B2C3D4E5F60718293A4B6 /* ContentView.swift in Sources */,
 				8A1B2C3D4E5F60718293A4B7 /* LoginView.swift in Sources */,
 				8A1B2C3D4E5F60718293A4B8 /* RegisterView.swift in Sources */,
@@ -289,7 +289,7 @@
 /* Begin PBXTargetDependency section */
 		3C4D5E6F70819203A4B5C6D8 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 5E6F70819203A4B5C6D7E8F9 /* LocationTracker */;
+			target = 5E6F70819203A4B5C6D7E8F9 /* Locationz */;
 			targetProxy = 3C4D5E6F70819203A4B5C6D7 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -355,7 +355,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7XYRZFRL6S;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = LocationTracker/Info.plist;
+				INFOPLIST_FILE = Locationz/Info.plist;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Locationz needs your location to record your position history.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Locationz needs your location to show your current position.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -384,7 +384,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7XYRZFRL6S;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = LocationTracker/Info.plist;
+				INFOPLIST_FILE = Locationz/Info.plist;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Locationz needs your location to record your position history.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Locationz needs your location to show your current position.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -419,7 +419,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LocationTracker.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LocationTracker";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Locationz.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Locationz";
 			};
 			name = Debug;
 		};
@@ -437,14 +437,14 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LocationTracker.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LocationTracker";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Locationz.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Locationz";
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		7A8B9C0D1E2F30415263A4B3 /* Build configuration list for PBXProject "LocationTracker" */ = {
+		7A8B9C0D1E2F30415263A4B3 /* Build configuration list for PBXProject "Locationz" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AA1B2C3D4E5F60718293A4B5 /* Debug */,
@@ -453,7 +453,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		7A8B9C0D1E2F30415263A4B5 /* Build configuration list for PBXNativeTarget "LocationTracker" */ = {
+		7A8B9C0D1E2F30415263A4B5 /* Build configuration list for PBXNativeTarget "Locationz" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB1B2C3D4E5F60718293A4B5 /* Debug */,
@@ -462,7 +462,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		7A8B9C0D1E2F30415263A4B7 /* Build configuration list for PBXNativeTarget "LocationTrackerTests" */ = {
+		7A8B9C0D1E2F30415263A4B7 /* Build configuration list for PBXNativeTarget "LocationzTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				CC1B2C3D4E5F60718293A4B5 /* Debug */,

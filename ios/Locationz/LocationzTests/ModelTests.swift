@@ -1,5 +1,5 @@
 import XCTest
-@testable import LocationTracker
+@testable import Locationz
 
 /// Tests for model decoding and computed properties using the test fixture data.
 final class ModelTests: XCTestCase {

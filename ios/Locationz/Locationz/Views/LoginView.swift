@@ -18,7 +18,7 @@ struct LoginView: View {
                     .font(.system(size: 64))
                     .foregroundStyle(.blue)
 
-                Text("Location Tracker")
+                Text("Locationz")
                     .font(.largeTitle.bold())
 
                 Text("Sign in to start tracking")

@@ -48,7 +48,7 @@ class APIService: ObservableObject {
     var isAuthenticated: Bool { token != nil }
 
     init() {
-        self.baseURL = UserDefaults.standard.string(forKey: "server_base_url") ?? "https://locations.codelook.ch"
+        self.baseURL = UserDefaults.standard.string(forKey: "server_base_url") ?? "https://locationz.codelook.ch"
         self.token = UserDefaults.standard.string(forKey: "auth_token")
     }
 
