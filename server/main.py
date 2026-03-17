@@ -12,7 +12,7 @@ from database import init_db
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
-LOG_DIR = os.environ.get("LOG_DIR", "/data" if os.path.isdir("/data") else ".")
+LOG_DIR = os.environ.get("DATA_DIR", "/data" if os.path.isdir("/data") else ".")
 LOG_FILE = os.path.join(LOG_DIR, "locationz.log")
 
 logging.basicConfig(

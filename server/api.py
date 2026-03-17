@@ -718,7 +718,7 @@ def admin_delete_user(
 # Data transfer (secured by DATA_SECRET env var)
 # ---------------------------------------------------------------------------
 
-DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
 DATA_SECRET = os.environ.get("DATA_SECRET", "")
 SKIP_FILES = {".DS_Store", "locationz.log"}
 
