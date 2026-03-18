@@ -33,13 +33,25 @@ struct VisitInfo: Codable, Identifiable {
         return "\(days)d \(remainingHrs)h"
     }
 
-    var arrivalDate: Date? {
-        ISO8601DateFormatter().date(from: arrival)
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static func parseDate(_ str: String) -> Date? {
+        // Try with fractional seconds first, then without, then with Z appended
+        if let d = isoFormatter.date(from: str) { return d }
+        let basic = ISO8601DateFormatter()
+        basic.formatOptions = [.withInternetDateTime]
+        if let d = basic.date(from: str) { return d }
+        // Server sends naive UTC without Z suffix
+        if let d = basic.date(from: str + "Z") { return d }
+        return nil
     }
 
-    var departureDate: Date? {
-        ISO8601DateFormatter().date(from: departure)
-    }
+    var arrivalDate: Date? { Self.parseDate(arrival) }
+    var departureDate: Date? { Self.parseDate(departure) }
 
     var displayLocation: String {
         address ?? String(format: "%.5f, %.5f", latitude, longitude)
