@@ -397,12 +397,16 @@ def get_visits(
     if start_date:
         try:
             start = datetime.datetime.fromisoformat(start_date)
+            if start.tzinfo is not None:
+                start = start.astimezone(datetime.timezone.utc).replace(tzinfo=None)
             query = query.filter(Visit.arrival >= start)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid start_date format (use ISO 8601)")
     if end_date:
         try:
             end = datetime.datetime.fromisoformat(end_date)
+            if end.tzinfo is not None:
+                end = end.astimezone(datetime.timezone.utc).replace(tzinfo=None)
             query = query.filter(Visit.arrival < end)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid end_date format (use ISO 8601)")
@@ -500,6 +504,41 @@ def get_frequent_places(
             total_duration_seconds=p.total_duration_seconds,
         )
         for p in places
+    ]
+
+
+@router.get("/places/{place_id}/visits", response_model=list[VisitResponse])
+def get_place_visits(
+    place_id: int,
+    limit: int = 100,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return all visits for a specific place."""
+    place = db.query(Place).filter(Place.id == place_id, Place.user_id == user.id).first()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    visits = (
+        db.query(Visit)
+        .filter(Visit.place_id == place_id)
+        .order_by(Visit.arrival.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        VisitResponse(
+            id=v.id,
+            device_id=v.device_id,
+            place_id=v.place_id,
+            latitude=v.latitude,
+            longitude=v.longitude,
+            arrival=v.arrival.isoformat(),
+            departure=v.departure.isoformat(),
+            duration_seconds=v.duration_seconds,
+            address=v.address,
+        )
+        for v in visits
     ]
 
 

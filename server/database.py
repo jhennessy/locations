@@ -9,7 +9,10 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-os.makedirs(DATA_DIR, exist_ok=True)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except OSError:
+    pass
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{os.path.join(DATA_DIR, 'locations.db')}")
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})

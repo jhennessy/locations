@@ -176,6 +176,11 @@ class APIService: ObservableObject {
         return try JSONDecoder().decode([PlaceInfo].self, from: data)
     }
 
+    func fetchPlaceVisits(placeId: Int, limit: Int = 100) async throws -> [VisitInfo] {
+        let data = try await makeRequest(path: "/api/places/\(placeId)/visits?limit=\(limit)", method: "GET")
+        return try JSONDecoder().decode([VisitInfo].self, from: data)
+    }
+
     // MARK: - Positions (live sharing)
 
     func updatePosition(deviceId: Int, latitude: Double, longitude: Double, altitude: Double?,

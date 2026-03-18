@@ -8,6 +8,9 @@ struct FrequentPlacesView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var cameraPosition: MapCameraPosition = .automatic
+    @State private var expandedPlaceId: Int?
+    @State private var placeVisits: [Int: [VisitInfo]] = [:]
+    @State private var loadingVisitsFor: Int?
 
     var body: some View {
         NavigationStack {
@@ -36,7 +39,7 @@ struct FrequentPlacesView: View {
                                 ) {
                                     ZStack {
                                         Circle()
-                                            .fill(.orange)
+                                            .fill(expandedPlaceId == place.id ? .blue : .orange)
                                             .frame(width: 30, height: 30)
                                         Text("\(place.visitCount)")
                                             .font(.caption.bold())
@@ -53,6 +56,9 @@ struct FrequentPlacesView: View {
                         LazyVStack(spacing: 8) {
                             ForEach(Array(places.enumerated()), id: \.element.id) { index, place in
                                 placeRow(place, rank: index + 1)
+                                    .onTapGesture {
+                                        handlePlaceTap(place)
+                                    }
                             }
                         }
                         .padding(.horizontal)
@@ -70,29 +76,94 @@ struct FrequentPlacesView: View {
     }
 
     private func placeRow(_ place: PlaceInfo, rank: Int) -> some View {
-        HStack(spacing: 12) {
-            // Rank badge
-            Text("#\(rank)")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .frame(width: 36)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                // Rank badge
+                Text("#\(rank)")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(place.displayName)
-                    .font(.subheadline.bold())
-                    .lineLimit(2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(place.displayName)
+                        .font(.subheadline.bold())
+                        .lineLimit(2)
 
-                if let address = place.address, place.name != nil {
-                    Text(address)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let address = place.address, place.name != nil {
+                        Text(address)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    HStack(spacing: 16) {
+                        Label("\(place.visitCount) visits", systemImage: "arrow.counterclockwise")
+                        Label(place.formattedTotalTime, systemImage: "clock")
+                        Label("avg \(place.formattedAvgTime)", systemImage: "timer")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
-                HStack(spacing: 16) {
-                    Label("\(place.visitCount) visits", systemImage: "arrow.counterclockwise")
-                    Label(place.formattedTotalTime, systemImage: "clock")
-                    Label("avg \(place.formattedAvgTime)", systemImage: "timer")
+                Spacer()
+
+                Image(systemName: expandedPlaceId == place.id ? "chevron.up" : "chevron.down")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding()
+
+            // Expanded visits section
+            if expandedPlaceId == place.id {
+                Divider()
+
+                if loadingVisitsFor == place.id {
+                    ProgressView()
+                        .padding()
+                } else if let visits = placeVisits[place.id], !visits.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(visits) { visit in
+                            visitRow(visit)
+                            if visit.id != visits.last?.id {
+                                Divider().padding(.leading, 16)
+                            }
+                        }
+                    }
+                } else {
+                    Text("No visits found")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding()
+                }
+            }
+        }
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
+    }
+
+    private func visitRow(_ visit: VisitInfo) -> some View {
+        HStack(spacing: 12) {
+            Text(visit.formattedDuration)
+                .font(.caption.bold())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.blue, in: Capsule())
+
+            VStack(alignment: .leading, spacing: 2) {
+                if let arrival = visit.arrivalDate {
+                    Text(arrival, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
+                        .font(.caption.bold())
+                }
+                HStack(spacing: 4) {
+                    if let arrival = visit.arrivalDate {
+                        Text(arrival, format: .dateTime.hour().minute())
+                    }
+                    if let departure = visit.departureDate {
+                        Text("–")
+                        Text(departure, format: .dateTime.hour().minute())
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -100,10 +171,37 @@ struct FrequentPlacesView: View {
 
             Spacer()
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private func handlePlaceTap(_ place: PlaceInfo) {
+        withAnimation {
+            if expandedPlaceId == place.id {
+                expandedPlaceId = nil
+            } else {
+                expandedPlaceId = place.id
+                cameraPosition = .region(MKCoordinateRegion(
+                    center: .init(latitude: place.latitude, longitude: place.longitude),
+                    latitudinalMeters: 2000,
+                    longitudinalMeters: 2000
+                ))
+
+                // Load visits if not already cached
+                if placeVisits[place.id] == nil {
+                    loadingVisitsFor = place.id
+                    Task {
+                        do {
+                            let visits = try await api.fetchPlaceVisits(placeId: place.id)
+                            placeVisits[place.id] = visits
+                        } catch {
+                            placeVisits[place.id] = []
+                        }
+                        loadingVisitsFor = nil
+                    }
+                }
+            }
+        }
     }
 
     private func loadPlaces() async {
