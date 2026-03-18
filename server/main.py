@@ -45,9 +45,10 @@ app.on_startup(init_db)
 import pages  # noqa: F401, E402
 
 ui.run(
+    host="0.0.0.0",
     title="Locationz",
     favicon="static/icon-512.png",
-    port=8380,
+    port=int(os.environ.get("PORT", 8380)),
     storage_secret=os.environ.get("STORAGE_SECRET", "change-me-in-production"),
     show=False,
 )
